@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+
+# Tearing down architecture, will prompt for confirmation
+cd $SCRIPT_DIR/terraform
+terraform destroy
+# if this fails, don't continue to removing build files
+if [[ $? -eq 1 ]]; then
+    echo "Failed to destroy terraform. Exiting."
+    exit 1
+fi
+
+# Removing build files, will prompt for confirmation
+cd $SCRIPT_DIR
+read -p "Removing ${SCRIPT_DIR}/build. Continue?(Y/n) " confirm
+if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+    rm -rf build
+    exit 0
+fi
+exit 1

@@ -1,8 +1,4 @@
 ## Lambda Logging ##
-variable logging_policy_arn {
-    type = string
-}
-
 data aws_iam_policy logging_policy {
     count = var.logging_policy_arn == "" ? 0 : 1
     arn = var.logging_policy_arn

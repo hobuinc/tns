@@ -24,10 +24,6 @@ resource aws_iam_policy logging_policy {
 }
 
 ## Lambda Execution Role ##
-variable sts_lambda_role_name {
-    type = string
-}
-
 resource aws_iam_role_policy_attachment log_policy_attach {
     role = var.sts_lambda_role_name == "" ? aws_iam_role.sts_lambda_role[0].name : data.aws_iam_role.sts_lambda_role[0].name
     policy_arn = var.logging_policy_arn == "" ? aws_iam_policy.logging_policy[0].arn : data.aws_iam_policy.logging_policy[0].arn

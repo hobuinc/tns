@@ -6,11 +6,6 @@ import h3
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import wkt, from_geojson
 
-region = os.environ['AWS_REGION']
-sns = boto3.client("sns", region_name=region)
-dynamo = boto3.client("dynamodb", region_name=region)
-
-## Add an h3 partition and sort key to dynamo db
 
 def cover_polygon_h3(polygon: Polygon, resolution: int):
     '''
@@ -49,7 +44,9 @@ def cover_shape_h3(shape, resolution: int):
 
     return list(result_set)
 
-def get_db_comp(polygon, table_name):
+def get_db_comp(dynamo, polygon, table_name):
+
+
     sort_keys = cover_shape_h3(polygon, 3)
     part_keys = [h3.get_base_cell_number(hi) for hi in sort_keys]
     key_zip = zip(part_keys, sort_keys)
@@ -76,8 +73,11 @@ def get_db_comp(polygon, table_name):
 
 
 def db_add_handler(event, context):
+    region = os.environ['AWS_REGION']
     sns_out_arn = os.environ["SNS_OUT_ARN"]
     table_name = os.environ["DB_TABLE_NAME"]
+
+    dynamo = boto3.client("dynamodb", region_name=region)
 
     msg = event["Records"][0]["Sns"]["Message"]
     aoi = msg['aoi_name']
@@ -89,7 +89,7 @@ def db_add_handler(event, context):
     aoi_list = [[aoi] for s in sort_keys]
 
     # join previously created aois to the new one
-    cur_aoi_list = get_db_comp(polygon, table_name)
+    cur_aoi_list = get_db_comp(dynamo, polygon, table_name)
     for vals in cur_aoi_list:
         pk, sk, aois = vals
         if sk in sort_keys:
@@ -121,14 +121,18 @@ def db_add_handler(event, context):
     return res
 
 def comp_handler(event, context):
+    region = os.environ['AWS_REGION']
     sns_out_arn = os.environ["SNS_OUT_ARN"]
     table_name = os.environ["DB_TABLE_NAME"]
+
+    sns = boto3.client("sns", region_name=region)
+    dynamo = boto3.client("dynamodb", region_name=region)
 
     polygon_str = event["Records"][0]["Sns"]["Message"]['polygon']
     print(f"Polygon received: {polygon_str}")
     polygon = from_geojson(polygon_str)
 
-    h3_list = get_db_comp(polygon, table_name)
+    h3_list = get_db_comp(dynamo, polygon, table_name)
 
     aoi_list = []
     for b,r,aois in h3_list:

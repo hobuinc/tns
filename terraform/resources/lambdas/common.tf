@@ -2,10 +2,12 @@
 variable logging_policy_arn {
     type = string
 }
+
 data aws_iam_policy logging_policy {
     count = var.logging_policy_arn == "" ? 0 : 1
     arn = var.logging_policy_arn
 }
+
 resource aws_iam_policy logging_policy {
     count = var.logging_policy_arn == "" ? 1 : 0
     name = "tns_lambda_logging_policy"
@@ -34,10 +36,12 @@ resource aws_iam_role_policy_attachment log_policy_attach {
     role = var.sts_lambda_role_name == "" ? aws_iam_role.sts_lambda_role[0].name : data.aws_iam_role.sts_lambda_role[0].name
     policy_arn = var.logging_policy_arn == "" ? aws_iam_policy.logging_policy[0].arn : data.aws_iam_policy.logging_policy[0].arn
 }
+
 data aws_iam_role sts_lambda_role {
     count = var.sts_lambda_role_name == "" ? 0 : 1
     name = var.sts_lambda_role_name
 }
+
 resource aws_iam_role sts_lambda_role {
     count = var.sts_lambda_role_name == "" ? 1 : 0
     name = "tns_lambda_role"
@@ -55,6 +59,7 @@ resource aws_iam_role sts_lambda_role {
         ]
     })
 }
+
 resource aws_iam_role_policy lambda_policy {
     count = var.sts_lambda_role_name == "" ? 1 : 0
     name = "tns_lambda_policy"
@@ -67,8 +72,8 @@ resource aws_iam_role_policy lambda_policy {
                 Effect = "Allow"
                 Action = "sns:Publish"
                 Resource = [
-                    "${aws_sns_topic.comp_sns_out.arn}",
-                    "${aws_sns_topic.db_add_sns_out.arn}"
+                    "${var.comp_sns_out_arn}",
+                    "${var.db_add_sns_out_arn}"
                 ]
             },
             {
@@ -80,7 +85,7 @@ resource aws_iam_role_policy lambda_policy {
                     # cut this down to sns:ListSubscriptionByTopic
                 ]
                 Resource = [
-                    "${aws_sns_topic.comp_sns_out.arn}",
+                    "${var.comp_sns_out_arn}",
                 ]
             },
             {
@@ -92,9 +97,8 @@ resource aws_iam_role_policy lambda_policy {
                     "dynamodb:Query",
                     "dynamodb:PutItem",
                     "dynamodb:BatchWriteItem"
-
                 ]
-                Resource = "${aws_dynamodb_table.geodata_table.arn}"
+                Resource = "${var.table_arn}"
             }
         ]
     })

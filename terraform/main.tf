@@ -11,11 +11,34 @@ provider "aws" {
     region = "us-west-2"
 }
 
-module resources {
-    source = "./resources"
+module tns_base {
+    source = "./resources/base"
+}
+
+module tns_lambdas {
+    # only make this in prod env #
+    count=var.env=="prod" ? 1 : 0
+
+    source = "./resources/lambdas"
     conda_env_name = var.conda_env_name
     logging_policy_arn=var.logging_policy_arn
     sts_lambda_role_name=var.sts_lambda_role_name
+
+    table_name = module.tns_base.table_name
+    table_arn = module.tns_base.table_arn
+    comp_sns_in_arn = module.tns_base.comp_sns_in_arn
+    comp_sns_out_arn = module.tns_base.comp_sns_out_arn
+    db_add_sns_in_arn = module.tns_base.db_add_sns_in_arn
+    db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
+}
+
+variable env {
+    type = string
+    default = "prod"
+    validation {
+        condition = can(regex("^(prod|test)$", var.env))
+        error_message = "prod or test are only available env types."
+    }
 }
 
 variable conda_env_name {
@@ -33,34 +56,26 @@ variable sts_lambda_role_name {
     default=""
 }
 
-
-
 ############# Outputs ###############
 output table_name {
-    value = module.resources.table_name
+    value = module.tns_base.table_name
 }
 
 output comp_sqs_out {
-    value = module.resources.comp_sqs_out_arn
+    value = module.tns_base.comp_sqs_out_arn
 }
 output comp_sns_out {
-    value = module.resources.comp_sns_out_arn
+    value = module.tns_base.comp_sns_out_arn
 }
 output comp_sns_in {
-    value = module.resources.comp_sns_in_arn
+    value = module.tns_base.comp_sns_in_arn
 }
 
 output db_add_sns_out {
-    value = module.resources.db_add_sns_out_arn
+    value = module.tns_base.db_add_sns_out_arn
 }
 output db_add_sns_in {
-    value = module.resources.db_add_sns_in_arn
+    value = module.tns_base.db_add_sns_in_arn
 }
 
-output sub_sns_out {
-    value = module.resources.sub_sns_out_arn
-}
-output sub_sns_in {
-    value = module.resources.sub_sns_in_arn
-}
 ######################################

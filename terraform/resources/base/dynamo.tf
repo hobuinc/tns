@@ -19,3 +19,7 @@ resource aws_dynamodb_table geodata_table {
 output table_name {
     value = aws_dynamodb_table.geodata_table.name
 }
+
+output table_arn {
+    value = aws_dynamodb_table.geodata_table.arn
+}

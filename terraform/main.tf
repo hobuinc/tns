@@ -8,7 +8,7 @@ terraform {
 }
 
 provider "aws" {
-    region = "us-west-2"
+    region = var.aws_region
 }
 
 module tns_base {
@@ -30,6 +30,11 @@ module tns_lambdas {
     comp_sns_out_arn = module.tns_base.comp_sns_out_arn
     db_add_sns_in_arn = module.tns_base.db_add_sns_in_arn
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
+}
+
+variable aws_region {
+    type = string
+    default = "us-west-2"
 }
 
 variable env {
@@ -57,6 +62,9 @@ variable sts_lambda_role_name {
 }
 
 ############# Outputs ###############
+output aws_region {
+    value = var.aws_region
+}
 output table_name {
     value = module.tns_base.table_name
 }

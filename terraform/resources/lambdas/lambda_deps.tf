@@ -3,7 +3,7 @@ variable conda_env_name {
 }
 
 locals {
-    lambda_dir = "${path.root}/../src/lambda_code"
+    lambda_dir = "${path.root}/../src"
     build_dir = "${path.root}/../build"
     zip_path = "${local.build_dir}/lambda_package.zip"
 }

@@ -108,5 +108,6 @@ def test_lambdas(tf_output, db_add_event, comp_event):
     from db_lambda import db_add_handler, comp_handler
     dynamo_res = db_add_handler(db_add_event, None)
     assert dynamo_res['ResponseMetadata']['HTTPStatusCode'] == 200
+
     aois = comp_handler(comp_event, None)
     assert len(aois) == 1

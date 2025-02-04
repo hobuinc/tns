@@ -1,10 +1,10 @@
 import boto3
-import json
 import os
 
 import h3
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import wkt, from_geojson
+from boto3.dynamodb.conditions import Attr, Key
 
 
 def cover_polygon_h3(polygon: Polygon, resolution: int):
@@ -72,20 +72,23 @@ def db_add_handler(event, context):
     polygon_str = msg['polygon']['Value']
     polygon = from_geojson(polygon_str)
 
+    # make sure this aoi has not already been put into the database
+    res = dynamo.scan(
+        TableName=table_name,
+        IndexName='aois_index',
+        FilterExpression = "aoi_name = :aoi_name",
+        ExpressionAttributeValues={
+            ':aoi_name': {'S': aoi}
+        }
+    )
+    if res['Count'] > 0:
+        raise ValueError(f'AOI {aoi} has already been submitted.')
+
     # create new db entries for aoi-polygon combo
     part_keys = cover_shape_h3(polygon, 3)
     # part_keys = [h3.get_base_cell_number(s) for s in sort_keys]
     aoi_list = [aoi for s in part_keys]
     keys = zip(part_keys, aoi_list)
-
-    # join previously created aois to the new one
-    # cur_aoi_list = get_db_comp(dynamo, polygon, table_name)
-    # for vals in cur_aoi_list:
-    #     pk, sk, aois = vals
-    #     if sk in sort_keys:
-    #         idx = sort_keys.index(sk)
-    #         aoi_list[idx] = aoi_list[idx] + aois
-
 
     request = {
         f'{table_name}': [

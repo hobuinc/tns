@@ -44,3 +44,7 @@ output db_add_sns_in_arn {
 output db_add_sns_out_arn {
     value = aws_sns_topic.db_add_sns_out.arn
 }
+
+output db_add_sqs_out_arn {
+    value = aws_sqs_queue.db_add_sqs_out.arn
+}

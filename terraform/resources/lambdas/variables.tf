@@ -10,7 +10,7 @@ variable table_arn {
 variable comp_sns_out_arn {
     type = string
 }
-variable comp_sns_in_arn {
+variable comp_sqs_in_arn {
     type = string
 }
 

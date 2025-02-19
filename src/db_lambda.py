@@ -55,11 +55,41 @@ def get_db_comp(dynamo, polygon, table_name):
             ExpressionAttributeValues = {':h3_val': {'S': h3_idx}}
         )
         for i in res['Items']:
-            aname = i['aoi_name']['S']
+            aname = i['aoi_id']['N']
             if aname not in aoi_info.keys():
                 aoi_info[aname] = i['polygon']['S']
 
     return aoi_info
+
+def get_entries_by_aoi(dynamo, table_name, aoi):
+    a =  dynamo.scan(
+        TableName=table_name,
+        IndexName='aois_index',
+        FilterExpression = "aoi_id = :aoi_id",
+        ExpressionAttributeValues={
+            ':aoi_id': {'N': f'{aoi}'}
+        }
+    )
+    return a
+
+def delete_if_found(dynamo, table_name, aoi):
+    scanned = get_entries_by_aoi(dynamo, table_name, aoi)
+    if scanned['Count'] == 0 :
+        return
+    for i in scanned['Items']:
+        dynamo.delete_item(TableName = table_name, Key=i)
+    return
+
+def db_delete(event, context):
+    region = os.environ['AWS_REGION']
+    table_name = os.environ["DB_TABLE_NAME"]
+
+    dynamo = boto3.client("dynamodb", region_name=region)
+
+    msg = event["Records"][0]["Sns"]["MessageAttributes"]
+    aoi = msg['aoi']['Value']
+    delete_if_found(dynamo, table_name, aoi)
+
 
 def db_add_handler(event, context):
     region = os.environ['AWS_REGION']
@@ -72,21 +102,10 @@ def db_add_handler(event, context):
     polygon_str = msg['polygon']['Value']
     polygon = from_geojson(polygon_str)
 
-    # make sure this aoi has not already been put into the database
-    res = dynamo.scan(
-        TableName=table_name,
-        IndexName='aois_index',
-        FilterExpression = "aoi_name = :aoi_name",
-        ExpressionAttributeValues={
-            ':aoi_name': {'S': aoi}
-        }
-    )
-    if res['Count'] > 0:
-        raise ValueError(f'AOI {aoi} has already been submitted.')
+    delete_if_found(dynamo, table_name, aoi)
 
     # create new db entries for aoi-polygon combo
     part_keys = cover_shape_h3(polygon, 3)
-    # part_keys = [h3.get_base_cell_number(s) for s in sort_keys]
     aoi_list = [aoi for s in part_keys]
     keys = zip(part_keys, aoi_list)
 
@@ -96,7 +115,7 @@ def db_add_handler(event, context):
                 'PutRequest': {
                     'Item': {
                         'h3_idx': {'S': pk},
-                        'aoi_name': {'S': aoi},
+                        'aoi_id': {'N': aoi},
                         'polygon': {'S': polygon_str}
                     }
                 }
@@ -105,6 +124,21 @@ def db_add_handler(event, context):
         ]
     }
     res = dynamo.batch_write_item(RequestItems=request)
+
+    publish_res = sns.publish(TopicArn=sns_out_arn,
+        MessageAttributes={
+            'aoi': {
+                'DataType': 'String', 'StringValue': aoi
+            },
+            'h3_indices': {
+                'DataType': 'StringArray', 'StringValue': f'{part_keys}'
+            },
+            'response_code': {
+                'DataType': 'Number',
+                'StringValue': f'{res['ResponseMetadata']}'
+            }
+        },
+        Message="AOI: {aoi} added")
 
     return res
 
@@ -115,18 +149,41 @@ def comp_handler(event, context):
 
     sns = boto3.client("sns", region_name=region)
     dynamo = boto3.client("dynamodb", region_name=region)
+    sqs = boto3.client('sqs',region_name=region)
 
-    polygon_str = event["Records"][0]["Sns"]["MessageAttributes"]['polygon']['Value']
-    polygon = from_geojson(polygon_str)
+    aoi_impact_data = [ ]
+    message_id_info = [(e["eventSourceARN"], e['messageId'], e['receiptHandle']) for e in event["Records"]]
 
-    aoi_info = get_db_comp(dynamo, polygon, table_name)
+    # loop through queue messages, and delete once we're done with them
+    for e in event['Records']:
+        polygon_str = e['messageAttributes']['polygon']['Value']
+        polygon = from_geojson(polygon_str)
 
-    aoi_impact_list = []
-    upoly = Polygon(polygon)
-    for k,v in aoi_info.items():
-        dbpoly = from_geojson(v)
-        if not upoly.disjoint(dbpoly):
-            aoi_impact_list.append(k)
+        aoi_info = get_db_comp(dynamo, polygon, table_name)
+
+        aoi_impact_list = []
+        upoly = Polygon(polygon)
+        for k,v in aoi_info.items():
+            dbpoly = from_geojson(v)
+            if not upoly.disjoint(dbpoly):
+                aoi_impact_list.append(k)
+
+        impact_data = {
+            'input_polygon': {
+                'DataType': 'String',
+                'StringValue': polygon_str
+            },
+            'impacted_aois': {
+                'DataType': 'String',
+                'StringListValues': aoi_impact_list
+            }
+        }
+
+        source_arn = e['eventSourceARN']
+        queue_name= source_arn.split(':')[-1]
+        queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+        receipt_handle = e['receiptHandle']
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
     for aoi in aoi_impact_list:
         res = sns.publish(TopicArn=sns_out_arn,

@@ -69,26 +69,30 @@ resource aws_iam_role_policy lambda_policy {
                 ]
             },
             {
-                Sid = "FilterSnsMessage"
+                Sid = "ReceiveSqsMessage"
                 Effect = "Allow"
                 Action = [
-                    "sns:SetSubscriptionAttributes",
-                    "sns:*"
-                    # cut this down to sns:ListSubscriptionByTopic
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes",
+                    "sqs:ReceiveMessage",
+                    "sqs:ChangeMessageVisibility"
                 ]
                 Resource = [
-                    "${var.comp_sns_out_arn}",
+                    "${var.comp_sqs_in_arn}",
                 ]
+
             },
             {
                 Sid = "QueryDynamo"
-                Effect = "Allow",
+                Effect = "Allow"
                 Action = [
                     "dynamodb:GetItem",
                     "dynamodb:BatchGetItem",
                     "dynamodb:Query",
                     "dynamodb:PutItem",
-                    "dynamodb:BatchWriteItem"
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan"
                 ]
                 Resource = "${var.table_arn}"
             }

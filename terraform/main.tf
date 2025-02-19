@@ -26,7 +26,7 @@ module tns_lambdas {
 
     table_name = module.tns_base.table_name
     table_arn = module.tns_base.table_arn
-    comp_sns_in_arn = module.tns_base.comp_sns_in_arn
+    comp_sqs_in_arn = module.tns_base.comp_sqs_in_arn
     comp_sns_out_arn = module.tns_base.comp_sns_out_arn
     db_add_sns_in_arn = module.tns_base.db_add_sns_in_arn
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
@@ -75,8 +75,8 @@ output comp_sqs_out {
 output comp_sns_out {
     value = module.tns_base.comp_sns_out_arn
 }
-output comp_sns_in {
-    value = module.tns_base.comp_sns_in_arn
+output comp_sqs_in {
+    value = module.tns_base.comp_sqs_in_arn
 }
 
 output db_add_sns_out {

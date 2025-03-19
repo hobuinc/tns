@@ -33,3 +33,8 @@ data archive_file lambda_zip {
     source_dir = "${local.build_dir}/lambda_deps"
     output_path = "${local.build_dir}/lambda_package.zip"
 }
+
+resource terraform_data replacement {
+    input = local_file.db_code.content
+    triggers_replace = [local_file.db_code.content]
+}

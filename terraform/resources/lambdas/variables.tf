@@ -1,4 +1,3 @@
-# comp_lambda.tf and db_add.tf
 variable table_name {
     type = string
 }
@@ -7,10 +6,10 @@ variable table_arn {
 }
 
 # comp_lambda.tf
-variable comp_sns_out_arn {
+variable db_comp_sns_out_arn {
     type = string
 }
-variable comp_sqs_in_arn {
+variable db_comp_sqs_in_arn {
     type = string
 }
 
@@ -18,7 +17,15 @@ variable comp_sqs_in_arn {
 variable db_add_sns_out_arn {
     type = string
 }
-variable db_add_sns_in_arn {
+variable db_add_sqs_in_arn {
+    type = string
+}
+
+# db_delete_lambda.tf
+variable db_delete_sns_out_arn {
+    type = string
+}
+variable db_delete_sqs_in_arn {
     type = string
 }
 

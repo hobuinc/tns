@@ -64,8 +64,9 @@ resource aws_iam_role_policy lambda_policy {
                 Effect = "Allow"
                 Action = "sns:Publish"
                 Resource = [
-                    "${var.comp_sns_out_arn}",
-                    "${var.db_add_sns_out_arn}"
+                    "${var.db_comp_sns_out_arn}",
+                    "${var.db_add_sns_out_arn}",
+                    "${var.db_delete_sns_out_arn}"
                 ]
             },
             {
@@ -75,10 +76,13 @@ resource aws_iam_role_policy lambda_policy {
                     "sqs:DeleteMessage",
                     "sqs:GetQueueAttributes",
                     "sqs:ReceiveMessage",
-                    "sqs:ChangeMessageVisibility"
+                    "sqs:ChangeMessageVisibility",
+                    "sqs:GetQueueUrl"
                 ]
                 Resource = [
-                    "${var.comp_sqs_in_arn}",
+                    "${var.db_comp_sqs_in_arn}",
+                    "${var.db_add_sqs_in_arn}",
+                    "${var.db_delete_sqs_in_arn}",
                 ]
 
             },

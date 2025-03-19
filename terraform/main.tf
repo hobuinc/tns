@@ -26,10 +26,15 @@ module tns_lambdas {
 
     table_name = module.tns_base.table_name
     table_arn = module.tns_base.table_arn
-    comp_sqs_in_arn = module.tns_base.comp_sqs_in_arn
-    comp_sns_out_arn = module.tns_base.comp_sns_out_arn
-    db_add_sns_in_arn = module.tns_base.db_add_sns_in_arn
+
+    db_comp_sqs_in_arn = module.tns_base.db_comp_sqs_in_arn
+    db_comp_sns_out_arn = module.tns_base.db_comp_sns_out_arn
+
+    db_add_sqs_in_arn = module.tns_base.db_add_sqs_in_arn
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
+
+    db_delete_sqs_in_arn =  module.tns_base.db_delete_sqs_in_arn
+    db_delete_sns_out_arn = module.tns_base.db_delete_sns_out_arn
 }
 
 variable aws_region {
@@ -69,21 +74,46 @@ output table_name {
     value = module.tns_base.table_name
 }
 
-output comp_sqs_out {
-    value = module.tns_base.comp_sqs_out_arn
+#comp
+output db_comp_sqs_out {
+    value = module.tns_base.db_comp_sqs_out_arn
 }
-output comp_sns_out {
-    value = module.tns_base.comp_sns_out_arn
+output db_comp_sns_out {
+    value = module.tns_base.db_comp_sns_out_arn
 }
-output comp_sqs_in {
-    value = module.tns_base.comp_sqs_in_arn
+output db_comp_sqs_in {
+    value = module.tns_base.db_comp_sqs_in_arn
+}
+output db_comp_sns_in {
+    value = module.tns_base.db_comp_sns_in_arn
 }
 
+#db_add/update
+output db_add_sns_in {
+    value = module.tns_base.db_add_sns_in_arn
+}
 output db_add_sns_out {
     value = module.tns_base.db_add_sns_out_arn
 }
-output db_add_sns_in {
-    value = module.tns_base.db_add_sns_in_arn
+output db_add_sqs_in {
+    value = module.tns_base.db_add_sqs_in_arn
+}
+output db_add_sqs_out {
+    value = module.tns_base.db_add_sqs_out_arn
+}
+
+#db_delete
+output db_delete_sns_in {
+    value = module.tns_base.db_delete_sns_in_arn
+}
+output db_delete_sns_out {
+    value = module.tns_base.db_delete_sns_out_arn
+}
+output db_delete_sqs_in {
+    value = module.tns_base.db_delete_sqs_in_arn
+}
+output db_delete_sqs_out {
+    value = module.tns_base.db_delete_sqs_out_arn
 }
 
 ######################################

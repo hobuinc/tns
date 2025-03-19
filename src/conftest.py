@@ -33,6 +33,10 @@ def tf_output(tf_dir):
     key_vals = {k:v['value'] for k,v in output_json.items()}
     yield key_vals
 
+@pytest.fixture(scope='session')
+def region(tf_output):
+    yield tf_output['aws_region']
+
 @pytest.fixture(scope='function')
 def h3_indices():
     yield ['832a06fffffffff', '832a31fffffffff', '832a04fffffffff']
@@ -87,81 +91,94 @@ def aoi():
 
 @pytest.fixture(scope='session')
 def comp_sqs_in_arn(tf_output):
-    yield tf_output['comp_sqs_in']
+    yield tf_output['db_comp_sqs_in']
+
+@pytest.fixture(scope='session')
+def db_add_sqs_in_arn(tf_output):
+    yield tf_output['db_add_sqs_in']
+
+@pytest.fixture(scope='session')
+def db_delete_sqs_in_arn(tf_output):
+    yield tf_output['db_delete_sqs_in']
+
+@pytest.fixture(scope='function')
+def add_update_receipt_handle(tf_output, region, geom):
+    queue_arn = tf_output['db_add_sqs_in']
+    aws_region = tf_output['aws_region']
+    sqs = boto3.client('sqs', region_name=aws_region)
+    queue_name = queue_arn.split(':')[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    message_res = sqs.send_message(
+        QueueUrl = queue_url,
+        MessageBody = "Polygon added",
+        MessageAttributes = {
+            "polygon": {
+                "DataType": "String",
+                "StringValue": f"{geom}"
+            }
+        }
+    )
+    message = sqs.receive_message(
+        QueueUrl=queue_url,
+        MaxNumberOfMessages=1,
+        MessageSystemAttributeNames=['All']
+    )
+    handle = message['Messages'][0]['ReceiptHandle']
+    yield handle
 
 # for information on SNS message attributes \
 # https://docs.aws.amazon.com/sns/latest/dg/sns-message-attributes.html
 @pytest.fixture(scope='function')
-def add_event(aoi, geom):
+def add_event(region, aoi, geom, add_update_receipt_handle, db_add_sqs_in_arn):
+    body = '{\n  "Type" : "Notification",\n  "MessageId" : "57781038-61c3-5c09-acb4-707878414763",\n  "TopicArn" : "arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c",\n  "Message" : "None",\n  "Timestamp" : "2025-03-03T20:55:30.955Z",\n  "SignatureVersion" : "1",\n  "Signature" : "BoJuS+OM69jXkxlM8L2rlPxZjHEt1qOF58h/wwBs0kK4iWdQ3IlT4spkEswZ17FhIl/ncL1gzNfLbzgVxuBDZM//GDd1to9iMaRjrGiz+zxoa7SKK7nQCGFrZrfQ/1083r+QsyjRC24QiG8MEudmn542yMtyUWyRKoh4Ep1AQLgPaBb/tfRtS/MJr7smvg1EE7zbQDoY2+p9Jldp/sTm4zS+pNHRS3qy3M9Ztwd/4VUNhwPaaYMIcvbWlgrvJFdYa3Y8OLRDA6umpJFGqMJ0cWwweAEPKDAzo1hRSTPuOCNrUWQMQZpeHKdNo+iN9DKwh4A2F8ZTu07UmAZtRdDP3A==",\n  "SigningCertURL" : "https://sns.us-west-2.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",\n  "UnsubscribeURL" : "https://sns.us-west-2.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c:18d0752b-0408-441d-9c30-05d8746d7185",\n  "MessageAttributes" : {\n "aoi":{"Type":"Number","Value":"'+aoi+'"}, "polygon":{"Type":"String","Value":'+geom+'}\n  }\n}'
     yield {
         "Records": [
             {
-                "EventVersion": "1.0",
-                "EventSubscriptionArn": "asdf",
-                "EventSource": "asdf",
-                "Sns": {
-                    "SignatureVersion": "1",
-                    "Timestamp": "2019-01-02T12:45:07.000Z",
-                    "Signature": "asdf",
-                    "SigningCertURL": "sample.pem",
-                    "MessageId": "sample_uuid",
-                    "Message": f"{aoi}",
-                    "MessageAttributes": {
-                        "aoi": {
-                            "Type": "Number",
-                            "Value": f"{aoi}"
-                        },
-                        "polygon": {
-                            "Type": "String",
-                            "Value": f"{geom}"
-                        }
-                    },
-                    "Type": "Notification",
-                    "UnsubscribeUrl": "unsub_url.com",
-                    "TopicArn":"arn:aws:sns:us-east-1:123456789012:sns_sample",
-                    "Subject": "TestInvoke"
-                }
-            }
+                "messageId": "asdfasdfasdfsadf",
+                "receiptHandle": add_update_receipt_handle,
+                'body': body,
+                "attributes": {
+                    "ApproximateReceiveCount": "1",
+                    "SentTimestamp": "1545082649183",
+                    "SenderId": "AIDAIENQZJOLO23YVJ4VO",
+                    "ApproximateFirstReceiveTimestamp": "1545082649185"
+                },
+                "messageAttributes": { },
+                "md5OfBody": "e4e68fb7bd0e697a0ae8f1bb342846b3",
+                "eventSource": "aws:sqs",
+                "eventSourceARN": db_add_sqs_in_arn,
+                "awsRegion": region
+            },
         ]
     }
 
 @pytest.fixture(scope='function')
-def update_event(aoi, update_geom):
+def update_event(region, aoi, update_geom, add_update_receipt_handle):
+    body='{\n  "Type" : "Notification",\n  "MessageId" : "57781038-61c3-5c09-acb4-707878414763",\n  "TopicArn" : "arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c",\n  "Message" : "None",\n  "Timestamp" : "2025-03-03T20:55:30.955Z",\n  "SignatureVersion" : "1",\n  "Signature" : "BoJuS+OM69jXkxlM8L2rlPxZjHEt1qOF58h/wwBs0kK4iWdQ3IlT4spkEswZ17FhIl/ncL1gzNfLbzgVxuBDZM//GDd1to9iMaRjrGiz+zxoa7SKK7nQCGFrZrfQ/1083r+QsyjRC24QiG8MEudmn542yMtyUWyRKoh4Ep1AQLgPaBb/tfRtS/MJr7smvg1EE7zbQDoY2+p9Jldp/sTm4zS+pNHRS3qy3M9Ztwd/4VUNhwPaaYMIcvbWlgrvJFdYa3Y8OLRDA6umpJFGqMJ0cWwweAEPKDAzo1hRSTPuOCNrUWQMQZpeHKdNo+iN9DKwh4A2F8ZTu07UmAZtRdDP3A==",\n  "SigningCertURL" : "https://sns.us-west-2.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",\n  "UnsubscribeURL" : "https://sns.us-west-2.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c:18d0752b-0408-441d-9c30-05d8746d7185",\n  "MessageAttributes" : {\n "aoi":{"Type":"Number","Value":"'+aoi+'"}, "polygon":{"Type":"String","Value":'+update_geom+'}\n  }\n}'
     yield {
         "Records": [
             {
-                "EventVersion": "1.0",
-                "EventSubscriptionArn": "asdf",
-                "EventSource": "asdf",
-                "Sns": {
-                    "SignatureVersion": "1",
-                    "Timestamp": "2019-01-02T12:45:07.000Z",
-                    "Signature": "asdf",
-                    "SigningCertURL": "sample.pem",
-                    "MessageId": "sample_uuid",
-                    "Message": f"{aoi}",
-                    "MessageAttributes": {
-                        "aoi": {
-                            "Type": "Number",
-                            "Value": f"{aoi}"
-                        },
-                        "polygon": {
-                            "Type": "String",
-                            "Value": f"{update_geom}"
-                        }
-                    },
-                    "Type": "Notification",
-                    "UnsubscribeUrl": "unsub_url.com",
-                    "TopicArn":"arn:aws:sns:us-east-1:123456789012:sns_sample",
-                    "Subject": "TestInvoke"
-                }
-            }
+                "messageId": "asdfasdfasdfsadf",
+                "receiptHandle": add_update_receipt_handle,
+                'body': body,
+                "attributes": {
+                    "ApproximateReceiveCount": "1",
+                    "SentTimestamp": "1545082649183",
+                    "SenderId": "AIDAIENQZJOLO23YVJ4VO",
+                    "ApproximateFirstReceiveTimestamp": "1545082649185"
+                },
+                "messageAttributes": { },
+                "md5OfBody": "e4e68fb7bd0e697a0ae8f1bb342846b3",
+                "eventSource": "aws:sqs",
+                "eventSourceARN": db_add_sqs_in_arn,
+                "awsRegion": region
+            },
         ]
     }
 
 @pytest.fixture(scope='function')
-def sqs_receipt_handle(tf_output, geom):
-    queue_arn = tf_output['comp_sqs_in']
+def comp_receipt_handle(tf_output, geom):
+    queue_arn = tf_output['db_comp_sqs_in']
     aws_region = tf_output['aws_region']
     sqs = boto3.client('sqs', region_name=aws_region)
     queue_name = queue_arn.split(':')[-1]
@@ -185,29 +202,73 @@ def sqs_receipt_handle(tf_output, geom):
     yield handle
 
 @pytest.fixture(scope='function')
-def comp_event(geom, comp_sqs_in_arn, sqs_receipt_handle):
+def comp_event(region, geom, comp_sqs_in_arn, comp_receipt_handle):
+    body='{\n  "Type" : "Notification",\n  "MessageId" : "57781038-61c3-5c09-acb4-707878414763",\n  "TopicArn" : "arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c",\n  "Message" : "None",\n  "Timestamp" : "2025-03-03T20:55:30.955Z",\n  "SignatureVersion" : "1",\n  "Signature" : "BoJuS+OM69jXkxlM8L2rlPxZjHEt1qOF58h/wwBs0kK4iWdQ3IlT4spkEswZ17FhIl/ncL1gzNfLbzgVxuBDZM//GDd1to9iMaRjrGiz+zxoa7SKK7nQCGFrZrfQ/1083r+QsyjRC24QiG8MEudmn542yMtyUWyRKoh4Ep1AQLgPaBb/tfRtS/MJr7smvg1EE7zbQDoY2+p9Jldp/sTm4zS+pNHRS3qy3M9Ztwd/4VUNhwPaaYMIcvbWlgrvJFdYa3Y8OLRDA6umpJFGqMJ0cWwweAEPKDAzo1hRSTPuOCNrUWQMQZpeHKdNo+iN9DKwh4A2F8ZTu07UmAZtRdDP3A==",\n  "SigningCertURL" : "https://sns.us-west-2.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",\n  "UnsubscribeURL" : "https://sns.us-west-2.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c:18d0752b-0408-441d-9c30-05d8746d7185",\n  "MessageAttributes" : {\n    "polygon" : {"Type":"String","Value":'+geom+'}\n  }\n}',
+    yield {
+        'Records': [
+            {
+                'messageId': '72823017-6148-4000-ba5a-66effc1ea71b',
+                'receiptHandle': comp_receipt_handle,
+                'body': body,
+                'attributes': {
+                    'ApproximateReceiveCount': '2',
+                    'SentTimestamp': '1741035331000',
+                    'SenderId': 'AIDAIYLAVTDLUXBIEIX46',
+                    'ApproximateFirstReceiveTimestamp': '1741035331015'
+                },
+                'messageAttributes': {},
+                'md5OfBody': 'dbc00a6065b95f09871d38de1c25666b',
+                'eventSource': 'aws:sqs',
+                'eventSourceARN': comp_sqs_in_arn,
+                'awsRegion': region
+            }
+        ]
+    }
+
+@pytest.fixture(scope='function')
+def delete_receipt_handle(tf_output, geom):
+    queue_arn = tf_output['db_delete_sqs_in']
+    aws_region = tf_output['aws_region']
+    sqs = boto3.client('sqs', region_name=aws_region)
+    queue_name = queue_arn.split(':')[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    message_res = sqs.send_message(
+        QueueUrl = queue_url,
+        MessageBody = "Polygon added",
+        MessageAttributes = {
+            "polygon": {
+                "DataType": "String",
+                "StringValue": f"{geom}"
+            }
+        }
+    )
+    message = sqs.receive_message(
+        QueueUrl=queue_url,
+        MaxNumberOfMessages=1,
+        MessageSystemAttributeNames=['All']
+    )
+    handle = message['Messages'][0]['ReceiptHandle']
+    yield handle
+
+@pytest.fixture(scope='function')
+def delete_event(region, aoi, delete_receipt_handle, db_delete_sqs_in_arn):
     yield {
         "Records": [
             {
-                "messageId": "asdfasdfasdfsadf",
-                "receiptHandle": sqs_receipt_handle,
-                "body": "Test message.",
+                "messageId": "72823017-6148-4000-ba5a-66effc1ea71b",
+                "receiptHandle": delete_receipt_handle,
+                'body': '{\n  "Type" : "Notification",\n  "MessageId" : "57781038-61c3-5c09-acb4-707878414763",\n  "TopicArn" : "arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c",\n  "Message" : "None",\n  "Timestamp" : "2025-03-03T20:55:30.955Z",\n  "SignatureVersion" : "1",\n  "Signature" : "BoJuS+OM69jXkxlM8L2rlPxZjHEt1qOF58h/wwBs0kK4iWdQ3IlT4spkEswZ17FhIl/ncL1gzNfLbzgVxuBDZM//GDd1to9iMaRjrGiz+zxoa7SKK7nQCGFrZrfQ/1083r+QsyjRC24QiG8MEudmn542yMtyUWyRKoh4Ep1AQLgPaBb/tfRtS/MJr7smvg1EE7zbQDoY2+p9Jldp/sTm4zS+pNHRS3qy3M9Ztwd/4VUNhwPaaYMIcvbWlgrvJFdYa3Y8OLRDA6umpJFGqMJ0cWwweAEPKDAzo1hRSTPuOCNrUWQMQZpeHKdNo+iN9DKwh4A2F8ZTu07UmAZtRdDP3A==",\n  "SigningCertURL" : "https://sns.us-west-2.amazonaws.com/SimpleNotificationService-9c6465fa7f48f5cacd23014631ec1136.pem",\n  "UnsubscribeURL" : "https://sns.us-west-2.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-west-2:068489536557:tns_db_comp_sns_input2025030319513457330000000c:18d0752b-0408-441d-9c30-05d8746d7185",\n  "MessageAttributes" : {\n    "aoi" : {"Type":"Number","Value":"'+aoi+'"}\n  }\n}',
                 "attributes": {
                     "ApproximateReceiveCount": "1",
                     "SentTimestamp": "1545082649183",
                     "SenderId": "AIDAIENQZJOLO23YVJ4VO",
                     "ApproximateFirstReceiveTimestamp": "1545082649185"
                 },
-                "messageAttributes": {
-                    "polygon": {
-                        "Type": "String",
-                        "Value": geom
-                    }
-                },
+                "messageAttributes": { },
                 "md5OfBody": "e4e68fb7bd0e697a0ae8f1bb342846b3",
                 "eventSource": "aws:sqs",
-                "eventSourceARN": comp_sqs_in_arn,
-                "awsRegion": "us-east-2"
+                "eventSourceARN": db_delete_sqs_in_arn,
+                "awsRegion": region
             },
         ]
     }

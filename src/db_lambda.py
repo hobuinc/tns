@@ -16,7 +16,6 @@ def delete_sqs_message(e, region):
     receipt_handle = e['receiptHandle']
     return sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
-
 def cover_polygon_h3(polygon, resolution: int):
     '''
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
@@ -100,19 +99,41 @@ def db_delete_handler(event, context):
     dynamo = boto3.client("dynamodb", region_name=region)
     sns = boto3.client('sns', region_name=region)
     for e in event['Records']:
-        sns_message = json.loads(e['body'])
-        msg = sns_message["MessageAttributes"]
-        aoi = msg['aoi']['Value']
-        delete_if_found(dynamo, table_name, aoi)
+        try:
+            sns_message = json.loads(e['body'])
+            msg = sns_message["MessageAttributes"]
+            aoi = msg['aoi']['Value']
+            delete_if_found(dynamo, table_name, aoi)
 
-        publish_res = sns.publish(TopicArn=sns_out_arn,
-            MessageAttributes={
-                'aoi': {
-                    'DataType': 'String', 'StringValue': aoi
+            publish_res = sns.publish(TopicArn=sns_out_arn,
+                MessageAttributes={
+                    'aoi': {
+                        'DataType': 'String', 'StringValue': aoi
+                    },
+                    'status': {
+                        'DataType': 'String',
+                        'StringValue': 'succeeded'
+                    }
                 },
-            },
-            Message="AOI: {aoi} deleted")
-        print(f'Publish response: {publish_res}')
+                Message=f"AOI: {aoi} deleted")
+            print(f'Successful response: {publish_res}')
+        except Exception as e:
+            publish_res = sns.publish(TopicArn=sns_out_arn,
+                MessageAttributes={
+                    'aoi': {
+                        'DataType': 'String', 'StringValue': aoi
+                    },
+                    'status': {
+                        'DataType': 'String',
+                        'StringValue': 'failed'
+                    },
+                    'error': {
+                        'DataType': 'String',
+                        'StringValue': f'{e.args}'
+                    }
+                },
+                Message="Failed to deleted aoi {aoi}")
+            print(f'Error response: {publish_res}')
 
 
 def db_add_handler(event, context):
@@ -124,18 +145,24 @@ def db_add_handler(event, context):
 
     sns = boto3.client("sns", region_name=region)
     dynamo = boto3.client("dynamodb", region_name=region)
-    try:
-        for e in event['Records']:
+    for e in event['Records']:
+        try:
             sns_message = json.loads(e['body'])
             msg = sns_message["MessageAttributes"]
             aoi = msg['aoi']['Value']
             polygon_str = msg['polygon']['Value']
 
+
+            print('sns_message', sns_message)
+            print('msg', msg)
+            print('aoi', aoi)
             # make sure it's stringified json so that from_geojson accepts it
             if isinstance(polygon_str, dict):
                 polygon_str = json.dumps(polygon_str)
 
+            print('polygon_str', polygon_str)
             polygon = from_geojson(polygon_str)
+            print('polygon')
 
             delete_if_found(dynamo, table_name, aoi)
 
@@ -168,33 +195,33 @@ def db_add_handler(event, context):
                     },
                     'h3_indices': {
                         'DataType': 'String.Array',
-                        'StringValue': f'{part_keys}'
+                        'StringValue': json.dumps(part_keys)
                     },
                     'status': {
                         'DataType': 'String',
                         'StringValue': 'succeeded'
                     }
                 },
-                Message="AOI: {aoi} added")
-            print(f'Publish response: {publish_res}')
-    except Exception as e:
-        publish_res = sns.publish(TopicArn=sns_out_arn,
-            MessageAttributes={
-                'aoi': {
-                    'DataType': 'String',
-                    'StringValue': aoi
+                Message=f"AOI: {aoi} added")
+            print(f'Added AOI response: {publish_res}')
+        except Exception as e:
+            publish_res = sns.publish(TopicArn=sns_out_arn,
+                MessageAttributes={
+                    'aoi': {
+                        'DataType': 'String',
+                        'StringValue': aoi
+                    },
+                    'status': {
+                        'DataType': 'String',
+                        'StringValue': 'failed'
+                    },
+                    'error': {
+                        'DataType': 'String',
+                        'StringValue': f'{e.args}'
+                    }
                 },
-                'status': {
-                    'DataType': 'String',
-                    'StringValue': 'failed'
-                },
-                'error': {
-                    'DataType': 'String',
-                    'StringValue': f'{e.args}'
-                }
-            },
-            Message=f'Error:{a.args}')
-        print(f'Publish response: {publish_res}')
+                Message=f'Error:{e}')
+            print(f'Error response: {publish_res}')
 
 def db_comp_handler(event, context):
     from shapely import from_geojson
@@ -208,7 +235,6 @@ def db_comp_handler(event, context):
         dynamo = boto3.client("dynamodb", region_name=region)
         sqs = boto3.client('sqs',region_name=region)
 
-        aoi_impact_data = [ ]
         message_id_info = [(e["eventSourceARN"], e['messageId'], e['receiptHandle']) for e in event["Records"]]
 
         # loop through queue messages, and delete once we're done with them
@@ -226,27 +252,31 @@ def db_comp_handler(event, context):
                 if not upoly.disjoint(dbpoly):
                     aoi_impact_list.append(k)
 
-            impact_data = {
-                'input_polygon': {
-                    'DataType': 'String',
-                    'StringValue': polygon_str
-                },
-                'impacted_aois': {
-                    'DataType': 'String',
-                    'StringListValues': aoi_impact_list
-                }
-            }
-
             delete_sqs_message(e, region)
 
         print('aois found: ', aoi_impact_list)
-        for aoi in aoi_impact_list:
-            print('publishing aoi ', aoi)
-            publish_res = sns.publish(TopicArn=sns_out_arn,
-                MessageAttributes={'aoi': {'DataType': 'String', 'StringValue': aoi}},
-                Message="{aoi}")
-            print(f'Publish response: {publish_res}')
-
+        publish_res = sns.publish(
+            TopicArn=sns_out_arn,
+            MessageAttributes={
+                'aois': {
+                    'DataType': 'String.Array',
+                    'StringValue': json.dumps(aoi_impact_list)
+                }
+            },
+            Message=json.dumps(aoi_impact_list)
+        )
+        print(f'Publish response: {publish_res}')
         return aoi_impact_list
     except Exception as e:
-        print('Failed with error: ', e)
+        publish_res = sns.publish(TopicArn=sns_out_arn,
+            MessageAttributes={
+                'status': {
+                    'DataType': 'String',
+                    'StringValue': 'failed'
+                },
+                'error': {
+                    'DataType': 'String',
+                    'StringValue': f'{e.args}'
+                }
+            },
+            Message=f'Error:{e.args}')

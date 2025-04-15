@@ -17,25 +17,26 @@ module tns_base {
 
 module tns_lambdas {
     # only make this in prod env #
-    count=var.env=="prod" ? 1 : 0
+    count = var.env == "prod" ? 1 : 0
 
     source = "./resources/lambdas"
     conda_env_name = var.conda_env_name
-    logging_policy_arn=var.logging_policy_arn
-    sts_lambda_role_name=var.sts_lambda_role_name
+    sts_lambda_role_name = var.sts_lambda_role_name
 
     table_name = module.tns_base.table_name
     table_arn = module.tns_base.table_arn
 
     db_comp_sqs_in_arn = module.tns_base.db_comp_sqs_in_arn
     db_comp_sns_out_arn = module.tns_base.db_comp_sns_out_arn
-
     db_add_sqs_in_arn = module.tns_base.db_add_sqs_in_arn
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
-
     db_delete_sqs_in_arn =  module.tns_base.db_delete_sqs_in_arn
     db_delete_sns_out_arn = module.tns_base.db_delete_sns_out_arn
 }
+
+####################################
+##            Inputs              ##
+####################################
 
 variable aws_region {
     type = string
@@ -57,16 +58,15 @@ variable conda_env_name {
 }
 
 #defaults of "" allow easier conditionals
-variable logging_policy_arn {
-    type=string
-    default=""
-}
 variable sts_lambda_role_name {
     type = string
     default=""
 }
 
-############# Outputs ###############
+#####################################
+##            Outputs              ##
+#####################################
+
 output aws_region {
     value = var.aws_region
 }

@@ -1,12 +1,28 @@
 ### Database Addition lambda SNS/SQS In and Out
 
-# input resources
+########### input resources ############
 resource aws_sns_topic db_delete_sns_in {
-    name_prefix = "tns_db_delete_input"
+    name = "tns_db_delete_input"
+    display_name = "tns_db_delete_input"
 }
 resource aws_sqs_queue db_delete_sqs_in {
-    name_prefix = "tns_db_delete_sqs_input"
+    name = "tns_db_delete_sqs_input"
     visibility_timeout_seconds=300
+    redrive_policy = jsonencode({
+        deadLetterTargetArn = aws_sqs_queue.db_delete_dlq_in.arn
+        maxReceiveCount = 10
+    })
+}
+resource aws_sqs_queue db_delete_dlq_in {
+    name = "tns_db_delete_dlq_in"
+}
+resource aws_sqs_queue_redrive_allow_policy db_delete_in_redrive_allow {
+    queue_url = aws_sqs_queue.db_delete_dlq_in.id
+
+    redrive_allow_policy = jsonencode({
+        redrivePermission = "byQueue",
+        sourceQueueArns   = [aws_sqs_queue.db_delete_sqs_in.arn]
+    })
 }
 resource aws_sns_topic_subscription db_delete_sqs_sns_in_sub {
     topic_arn = aws_sns_topic.db_delete_sns_in.arn
@@ -36,12 +52,28 @@ resource aws_sqs_queue_policy db_delete_sqs_in_policy {
 }
 
 
-# output resources
+########### output resources ############
 resource aws_sns_topic db_delete_sns_out {
-    name_prefix = "tns_db_delete_sns_output"
+    name = "tns_db_delete_sns_output"
+    display_name = "tns_db_delete_sns_output"
 }
 resource aws_sqs_queue db_delete_sqs_out {
-    name_prefix = "tns_db_delete_sqs_output"
+    name = "tns_db_delete_sqs_output"
+    redrive_policy = jsonencode({
+        deadLetterTargetArn = aws_sqs_queue.db_delete_dlq_out.arn
+        maxReceiveCount = 10
+    })
+}
+resource aws_sqs_queue db_delete_dlq_out {
+    name = "tns_db_delete_dlq_out"
+}
+resource aws_sqs_queue_redrive_allow_policy db_delete_out_redrive_allow {
+    queue_url = aws_sqs_queue.db_delete_dlq_out.id
+
+    redrive_allow_policy = jsonencode({
+        redrivePermission = "byQueue",
+        sourceQueueArns   = [aws_sqs_queue.db_delete_sqs_out.arn]
+    })
 }
 resource aws_sns_topic_subscription db_delete_sqs_sns_out_sub {
     topic_arn = aws_sns_topic.db_delete_sns_out.arn
@@ -82,4 +114,10 @@ output db_delete_sns_out_arn {
 }
 output db_delete_sqs_out_arn {
     value = aws_sqs_queue.db_delete_sqs_out.arn
+}
+output db_delete_in_dlq_arn {
+    value = aws_sqs_queue.db_delete_dlq_in
+}
+output db_delete_out_dlq_arn {
+    value = aws_sqs_queue.db_delete_dlq_out
 }

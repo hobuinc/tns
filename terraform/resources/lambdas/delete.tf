@@ -10,7 +10,7 @@ resource aws_lambda_function db_delete_lambda_function {
     environment {
         variables = {
             DB_TABLE_NAME: var.table_name
-            SNS_OUT_ARN: var.db_add_sns_out_arn
+            SNS_OUT_ARN: var.db_delete_sns_out_arn
         }
     }
     lifecycle {
@@ -18,7 +18,8 @@ resource aws_lambda_function db_delete_lambda_function {
     }
 }
 
-resource "aws_lambda_event_source_mapping" "example" {
-  event_source_arn = var.db_delete_sqs_in_arn
-  function_name    = aws_lambda_function.db_delete_lambda_function.arn
+resource aws_lambda_event_source_mapping delete_event_map {
+
+    event_source_arn = var.db_delete_sqs_in_arn
+    function_name    = aws_lambda_function.db_delete_lambda_function.arn
 }

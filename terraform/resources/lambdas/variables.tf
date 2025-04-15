@@ -30,9 +30,6 @@ variable db_delete_sqs_in_arn {
 }
 
 # common.tf
-variable logging_policy_arn {
-    type = string
-}
 variable sts_lambda_role_name {
     type = string
 }

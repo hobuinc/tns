@@ -2,47 +2,54 @@
 
 # get cwd so we can move back when we're done
 CWD=$PWD
+CONDA_ENV_NAME='tns'
 
 # find location of this directory to use
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
-export TF_DIR="$SCRIPT_DIR/terraform"
+export TF_DIR="$SCRIPT_DIR/../terraform"
 export TF_CLI_CONFIG_FILE="$TF_DIR/.terraformrc"
-export TF_PLUGIN_CACHE_DIR="$TF_DIR/tfplugins"
-export TF_MIRROR_DIR="$TF_DIR/mirror"
+export TF_PLUGIN_CACHE_DIR="$TF_DIR/.terraform/plugins"
+# export TF_PLUGIN_CACHE_DIR="$TF_DIR/tfplugins"
+export TF_PYTHON_DEPS_DIR="$SCRIPT_DIR/../build/lambda_deps"
 
 # remove leftovers from previous inits
 rm $TF_CLI_CONFIG_FILE
 rm -rf $TF_PLUGIN_CACHE_DIR
-rm -rf $TF_MIRROR_DIR
 rm $TF_DIR/.terraform.lock.hcl
 rm -rf $TF_DIR/.terraform
+rm -rf $TF_PYTHON_DEPS_DIR
 
 # create our files/dirs if they don't already exist
 touch $TF_CLI_CONFIG_FILE
 mkdir -p $TF_PLUGIN_CACHE_DIR
-mkdir -p $TF_MIRROR_DIR
 
-cd $SCRIPT_DIR/terraform
-terraform init
+echo "Installing Terraform providers to $TF_PLUGIN_CACHE_DIR"
+cd $SCRIPT_DIR/../terraform
+terraform init --upgrade
+terraform providers lock
 terraform providers mirror \
     -platform=linux_amd64 \
     -platform=darwin_arm64 \
-    -lock-file=false \
+    -lock-file=False \
     $TF_PLUGIN_CACHE_DIR
 
 echo "
 provider_installation {
   filesystem_mirror {
-    path = \"${TF_PLUGIN_CACHE_DIR}\"
-    include = [\"registry.terraform.io/*/*\"]
+    path = \".terraform/plugins\"
+    include = [\"*/*\"]
   }
 }" > $TF_CLI_CONFIG_FILE
 
-echo "terraform init"
-terraform init
+echo "Installing python dependencies to $TF_PYTHON_DEPS_DIR"
+mkdir -p $TF_PYTHON_DEPS_DIR
+conda run -n $CONDA_ENV_NAME \
+    pip install \
+    --platform manylinux2014_x86_64 \
+    --target $TF_PYTHON_DEPS_DIR \
+    --python-version 3.12 \
+    --only-binary=:all: boto3 shapely h3
 
-# echo "terraform providers lock --platform=linux_amd64 --platform=darwin_amd64 --platform=darwin_arm64 --platform=linux_arm64"
-# terraform providers lock -platform=linux_amd64 -platform=darwin_amd64 -platform=darwin_arm64 -platform=linux_arm64
 
 cd $CWD
 exit 1

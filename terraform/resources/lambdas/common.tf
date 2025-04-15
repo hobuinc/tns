@@ -1,34 +1,4 @@
-## Lambda Logging ##
-data aws_iam_policy logging_policy {
-    count = var.logging_policy_arn == "" ? 0 : 1
-    arn = var.logging_policy_arn
-}
-
-resource aws_iam_policy logging_policy {
-    count = var.logging_policy_arn == "" ? 1 : 0
-    name = "tns_lambda_logging_policy"
-    policy = jsonencode({
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Action": [
-                    "logs:CreateLogGroup",
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents"
-                ],
-                "Resource": "*"
-            }
-        ]
-    })
-}
-
 ## Lambda Execution Role ##
-resource aws_iam_role_policy_attachment log_policy_attach {
-    role = var.sts_lambda_role_name == "" ? aws_iam_role.sts_lambda_role[0].name : data.aws_iam_role.sts_lambda_role[0].name
-    policy_arn = var.logging_policy_arn == "" ? aws_iam_policy.logging_policy[0].arn : data.aws_iam_policy.logging_policy[0].arn
-}
-
 data aws_iam_role sts_lambda_role {
     count = var.sts_lambda_role_name == "" ? 0 : 1
     name = var.sts_lambda_role_name
@@ -99,6 +69,16 @@ resource aws_iam_role_policy lambda_policy {
                     "dynamodb:Scan"
                 ]
                 Resource = "${var.table_arn}"
+            },
+            {
+                Sid = "LogCreation"
+                Effect = "Allow"
+                Action = [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                ]
+                Resource: "*"
             }
         ]
     })

@@ -1,5 +1,16 @@
 import json
 import boto3
+import random
+
+from db_lambda import get_entries_by_aoi
+
+def delete_sqs_message(e, sqs_arn, region):
+    sqs = boto3.client('sqs', region_name=region)
+    queue_name= sqs_arn.split(':')[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    receipt_handle = e['ReceiptHandle']
+    return sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+
 
 def clear_sqs(sqs_arn, region):
     sqs = boto3.client('sqs', region_name=region)
@@ -12,7 +23,10 @@ def clear_sqs(sqs_arn, region):
         if 'Messages' in res.keys():
             messages = res['Messages']
             for m in messages:
+                receipt_handle=m['ReceiptHandle']
                 sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        else:
+            break
     return messages
 
 def sns_publish(sns_arn, region, aoi=None, polygon=None):
@@ -25,71 +39,144 @@ def sns_publish(sns_arn, region, aoi=None, polygon=None):
     res = sns.publish(TopicArn=sns_arn, MessageAttributes=message_attributes, Message=f"{aoi}")
     return res
 
-def sqs_listen(sqs_arn, region):
+def sqs_listen(sqs_arn, region, retries = 5):
     sqs = boto3.client('sqs', region_name=region)
     queue_name = sqs_arn.split(':')[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
     messages = []
+    retry_count = 0
     while not len(messages):
         res = sqs.receive_message(QueueUrl=queue_url,
                 MessageAttributeNames=['All'], MaxNumberOfMessages=10, WaitTimeSeconds=10)
         if 'Messages' in res.keys():
             messages = res['Messages']
+            retry_count = 0
+        else:
+            retry_count += 1
+            if retry_cont >= retries:
+                raise Exception('Retry count hit.')
     return messages
+
+def test_big(tf_output, dynamo, aoi, geom, h3_indices):
+    region = tf_output['aws_region']
+    sns_in = tf_output['db_add_sns_in']
+    sqs_out = tf_output['db_add_sqs_out']
+    table_name = tf_output['table_name']
+
+    count = 5000
+    for n in range(count):
+        sns_publish(sns_in, region, f'{n}', geom)
+
+    msg_count = 0
+    retry_count = 0
+    while msg_count < count:
+        messages = sqs_listen(sqs_out, region)
+        for msg in messages:
+            body = json.loads(msg['Body'])
+            message_str = body['Message']
+            assert message_str[:4] == 'AOI:'
+            assert message_str[-5:] == 'added'
+
+            attrs = body['MessageAttributes']
+
+            status = attrs['status']['Value']
+            assert status == 'succeeded'
+
+            aoi = attrs['aoi']['Value']
+
+            h3s = json.loads(attrs['h3_indices']['Value'])
+            for h in h3s:
+                assert h in h3_indices
+
+            delete_sqs_message(msg, sqs_out, region)
+            retry_count = 0
+            msg_count += 1
+
+    clear_sqs(sqs_out, region)
 
 def test_comp(tf_output, geom, db_fill):
     region = tf_output['aws_region']
     sns_in = tf_output['db_comp_sns_in']
     sqs_out = tf_output['db_comp_sqs_out']
     table_name = tf_output['table_name']
+
     res = sns_publish(sns_in, region, polygon=geom)
-    res = sqs_listen(sqs_out, region)
-    message = json.loads(res[0]['Body'])
-    aoi = message['MessageAttributes']['aoi']['Value']
-    assert aoi == '1234'
+    messages = sqs_listen(sqs_out, region)
+    for m in messages:
+        message = json.loads(m['Body'])
+        aois = json.loads(message['MessageAttributes']['aois']['Value'])
+        assert len(aois) == 1
+        assert aois[0] == '1234'
 
-def test_add(tf_output, add_event, dynamo, aoi, h3_indices):
-    os.environ['AWS_REGION'] = tf_output['aws_region']
-    os.environ['SNS_OUT_ARN'] = tf_output['db_add_sns_out']
-    os.environ['DB_TABLE_NAME'] = tf_output['table_name']
+    clear_sqs(sqs_out, region)
+
+def test_add(tf_output, dynamo, aoi, geom, h3_indices):
+    region = tf_output['aws_region']
+    sns_in = tf_output['db_add_sns_in']
+    sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
-    db_add_handler(add_event, None)
+    sns_publish(sns_in, region, aoi, geom)
+    messages = sqs_listen(sqs_out, region)
+    for msg in messages:
+        body = json.loads(msg['Body'])
+        message_str = body['Message']
+        assert message_str == f'AOI: {aoi} added'
 
-    added_items = get_entries_by_aoi(dynamo, table_name, aoi)
-    assert added_items['Count'] == 3
-    for i in added_items['Items']:
-        assert i['aoi_id']['N'] == f'{aoi}'
-        assert i['h3_idx']['S'] in h3_indices
+        attrs = body['MessageAttributes']
 
-def test_update(tf_output, db_fill, update_event, aoi, updated_h3_indices):
-    os.environ['AWS_REGION'] = tf_output['aws_region']
-    os.environ['SNS_OUT_ARN'] = tf_output['db_add_sns_out']
-    os.environ['DB_TABLE_NAME'] = tf_output['table_name']
+        status = attrs['status']['Value']
+        assert status == 'succeeded'
+
+        aoi = attrs['aoi']['Value']
+        assert aoi == '1234'
+
+        h3s = json.loads(attrs['h3_indices']['Value'])
+        for h in h3s:
+            assert h in h3_indices
+    clear_sqs(sqs_out, region)
+
+def test_update(tf_output, db_fill, aoi, update_geom, updated_h3_indices, h3_indices):
+    region = tf_output['aws_region']
+    sns_in = tf_output['db_add_sns_in']
+    sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
-    aws_region = tf_output['aws_region']
-    dynamo = boto3.client('dynamodb', region_name=aws_region)
+    dynamo = boto3.client('dynamodb', region_name=region)
 
     og_items = get_entries_by_aoi(dynamo, table_name, aoi)
+    og_h3 = [a['h3_idx']['S'] for a in og_items['Items']]
+    assert len(og_h3) == 3
+    for oh in og_h3:
+        assert oh in h3_indices
 
     # update
-    db_add_handler(update_event, None)
+    sns_publish(sns_in, region, aoi, update_geom)
+    messages = sqs_listen(sqs_out, region)
+    for msg in messages:
+        body = json.loads(msg['Body'])
+        message_str = body['Message']
+        assert message_str == f'AOI: {aoi} added'
 
-    updated_items = get_entries_by_aoi(dynamo, table_name, aoi)
-    assert updated_items['Count'] == 2
-    for i in updated_items['Items']:
-        assert i['aoi_id']['N'] == f'{aoi}'
-        assert i['h3_idx']['S'] in updated_h3_indices
+        attrs = body['MessageAttributes']
 
-def test_delete(tf_output, db_fill, delete_event, aoi, h3_indices):
-    os.environ['AWS_REGION'] = tf_output['aws_region']
-    os.environ['SNS_OUT_ARN'] = tf_output['db_delete_sns_out']
-    os.environ['DB_TABLE_NAME'] = tf_output['table_name']
+        status = attrs['status']['Value']
+        assert status == 'succeeded'
+
+        aoi = attrs['aoi']['Value']
+        assert aoi == '1234'
+
+        h3s = json.loads(attrs['h3_indices']['Value'])
+        for h in h3s:
+            assert h in updated_h3_indices
+
+def test_delete(tf_output, db_fill, aoi, h3_indices):
+    region = tf_output['aws_region']
+    sns_in = tf_output['db_delete_sns_in']
+    sqs_out = tf_output['db_delete_sqs_out']
     table_name = tf_output['table_name']
 
-    aws_region = tf_output['aws_region']
-    dynamo = boto3.client('dynamodb', region_name=aws_region)
+    dynamo = boto3.client('dynamodb', region_name=region)
 
     og_items = get_entries_by_aoi(dynamo, table_name, aoi)
     assert og_items['Count'] == 3
@@ -97,7 +184,12 @@ def test_delete(tf_output, db_fill, delete_event, aoi, h3_indices):
         assert i['aoi_id']['N'] == f'{aoi}'
         assert i['h3_idx']['S'] in h3_indices
 
-    db_delete_handler(delete_event, None)
+    sns_publish(sns_in, region, aoi)
+    messages = sqs_listen(sqs_out, region)
+    for msg in messages:
+        body = json.loads(msg['Body'])
+        message_str = body['Message']
+        assert message_str == f'AOI: {aoi} deleted'
 
     deleted_items = get_entries_by_aoi(dynamo, table_name, aoi)
     assert deleted_items['Count'] == 0

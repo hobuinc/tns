@@ -18,7 +18,7 @@ resource aws_lambda_function db_add_lambda_function {
     }
 }
 
-resource "aws_lambda_event_source_mapping" "example" {
-  event_source_arn = var.db_add_sqs_in_arn
-  function_name    = aws_lambda_function.db_add_lambda_function.arn
+resource aws_lambda_event_source_mapping add_update_event_map {
+    event_source_arn = var.db_add_sqs_in_arn
+    function_name    = aws_lambda_function.db_add_lambda_function.arn
 }

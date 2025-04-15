@@ -1,11 +1,11 @@
 # Tile Notification System (TNS)
 
 ## Overview
-The Tile Notification System (TNS) creates a group of cloud architecture resources meant to manage a database of Areas of Interest (AOIs) with corresponding global index codes, in this case using (Uber's H3)[https://www.uber.com/blog/h3/], which will allow the users to automatically compare geometries against those present in the database and detect overlaps.
+The Tile Notification System (TNS) creates a group of cloud architecture resources meant to manage a database of Areas of Interest (AOIs) with corresponding global index codes, in this case using [Uber's H3](https://www.uber.com/blog/h3/), which will allow the users to automatically compare geometries against those present in the database and detect overlaps.
 
 TNS should be deployable on an AWS EC2 instance with no internet connection (beside the ability to interact with AWS API), given it has the correct permissions.
 
-The main vehicle for this project is (Terraform)[https://www.terraform.io/], which allows TNS to cohesively deploy and link AWS cloud architecture components together. Terraform's (provider mirror)[https://developer.hashicorp.com/terraform/cli/commands/providers/mirror] capability allows projects to create a cache of language information and install from there, rather than reaching out to the Terraform registry over HTTP.
+The main vehicle for this project is [Terraform](https://www.terraform.io/), which allows TNS to cohesively deploy and link AWS cloud architecture components together. Terraform's [provider mirror](https://developer.hashicorp.com/terraform/cli/commands/providers/mirror) capability allows projects to create a cache of language information and install from there, rather than reaching out to the Terraform registry over HTTP.
 
 ## Getting Started
 

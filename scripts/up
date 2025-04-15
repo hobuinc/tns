@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+CMD="terraform apply"
+
+VAR_PATH=$1
+if [[ $VAR_PATH != "" ]]; then
+    VAR_PATH=$(realpath $VAR_PATH)
+    echo "VAR_PATH adjusted to ${VAR_PATH}"
+    CMD="${CMD} --var-file ${VAR_PATH}"
+fi
+echo $CMD
+
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+
+echo $SCRIPT_DIR
+
+cd $SCRIPT_DIR/../terraform
+eval $CMD

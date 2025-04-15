@@ -1,0 +1,113 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Action": [
+				"sts:GetCallerIdentity"
+			],
+			"Effect": "Allow",
+			"Resource": "*"
+		},
+		{
+			"Action": [
+				"sns:CreateTopic",
+				"sns:SetTopicAttributes",
+				"sns:GetTopicAttributes",
+				"sns:Subscribe",
+				"sns:GetSubscriptionAttributes",
+				"sns:Unsubscribe",
+				"sns:DeleteTopic",
+				"sns:ListTagsForResource"
+			],
+			"Effect": "Allow",
+			"Resource": [
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_add_sns_input",
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_add_sns_output",
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_delete_input",
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_delete_sns_output",
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_comp_sns_input",
+				"arn:aws:sns:${aws_region}:${account_id}:tns_db_comp_sns_output"
+			]
+		},
+		{
+			"Action": [
+				"dynamodb:CreateTable",
+				"dynamodb:DescribeTable",
+				"dynamodb:DescribeContinuousBackups",
+				"dynamodb:DescribeTimeToLive",
+				"dynamodb:DeleteTable",
+				"dynamodb:ListTagsOfResource"
+			],
+			"Effect": "Allow",
+			"Resource": "arn:aws:dynamodb:${aws_region}:${account_id}:table/tns_geodata_table"
+		},
+		{
+			"Action": [
+				"sqs:CreateQueue",
+				"sqs:TagQueue",
+				"sqs:GetQueueAttributes",
+				"sqs:ListQueueTags",
+				"sqs:SetQueueAttributes",
+				"sqs:DeleteQueue"
+			],
+			"Effect": "Allow",
+			"Resource": [
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_sqs_input",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_sqs_output",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_dlq_in",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_dlq_out",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_sqs_input",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_sqs_output",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_dlq_in",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_dlq_out",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_sqs_input",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_sqs_output",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_dlq_in",
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_dlq_out"
+			]
+		},
+		{
+			"Action": [
+				"lambda:CreateFunction",
+				"lambda:GetFunction",
+				"lambda:ListVersionsByFunction",
+				"lambda:GetFunctionCodeSigningConfig",
+				"lambda:DeleteFunction"
+			],
+			"Effect": "Allow",
+			"Resource": [
+				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_db_add_lambda",
+				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_db_delete_lambda",
+				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_comp_lambda"
+			]
+		},
+		{
+			"Action": [
+				"iam:GetRole",
+				"iam:PassRole"
+			],
+			"Effect": "Allow",
+			"Resource": "arn:aws:iam::${account_id}:role/TestTNSVariables"
+		},
+		{
+			"Action": [
+				"lambda:DeleteEventSourceMapping",
+				"lambda:CreateEventSourceMapping"
+			],
+			"Effect": "Allow",
+			"Resource": [
+				"arn:aws:lambda:${aws_region}:${account_id}:event-source-mapping:*"
+			]
+		},
+		{
+			"Action": [
+				"lambda:ListTags",
+                "lambda:GetEventSourceMapping"
+			],
+			"Effect": "Allow",
+			"Resource": [
+				"*"
+			]
+		}
+	]
+}

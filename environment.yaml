@@ -1,0 +1,9 @@
+name: 'tns'
+channels:
+  - conda-forge
+dependencies:
+  - terraform
+  - boto3
+  - python
+  - h3-py
+  - geopandas

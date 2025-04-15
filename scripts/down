@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+
+CMD="terraform destroy"
+
+VAR_PATH=$1
+if [[ $VAR_PATH != "" ]]; then
+    VAR_PATH=$(realpath $VAR_PATH)
+    echo "VAR_PATH adjusted to ${VAR_PATH}"
+    CMD="${CMD} --var-file ${VAR_PATH}"
+fi
+
+# Tearing down architecture, will prompt for confirmation
+echo $CMD
+cd $SCRIPT_DIR/../terraform
+eval $CMD
+# if this fails, don't continue to removing build files
+if [[ $? -eq 1 ]]; then
+    echo "Failed to destroy terraform. Exiting."
+    exit 1
+fi
+
+# Removing build files, will prompt for confirmation
+BUILD_PATH="${SCRIPT_DIR}/../build"
+read -p "Deleting ${BUILD_PATH}. You will need to run 'init' again to recreate these. Continue?(Y/n) " confirm
+if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+    rm -rf $BUILD_PATH
+    exit 0
+fi
+exit 1

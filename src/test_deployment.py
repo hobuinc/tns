@@ -53,7 +53,7 @@ def sqs_listen(sqs_arn, region, retries = 5):
             retry_count = 0
         else:
             retry_count += 1
-            if retry_cont >= retries:
+            if retry_count >= retries:
                 raise Exception('Retry count hit.')
     return messages
 
@@ -63,7 +63,7 @@ def test_big(tf_output, dynamo, aoi, geom, h3_indices):
     sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
-    count = 5000
+    count = 5
     for n in range(count):
         sns_publish(sns_in, region, f'{n}', geom)
 

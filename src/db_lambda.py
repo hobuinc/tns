@@ -240,7 +240,7 @@ def db_comp_handler(event, context):
         # loop through queue messages, and delete once we're done with them
         for e in event['Records']:
             sns_message = json.loads(e['body'])
-            polygon_str = sns_message['MessageAttributes']['polygon']['Value']
+            polygon_str = json.dumps(sns_message['MessageAttributes']['polygon']['Value'])
             polygon = from_geojson(polygon_str)
 
             aoi_info = get_db_comp(dynamo, polygon, table_name)

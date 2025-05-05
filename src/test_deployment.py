@@ -100,15 +100,15 @@ def test_comp(tf_output, geom, db_fill):
     sqs_out = tf_output['db_comp_sqs_out']
     table_name = tf_output['table_name']
 
+    clear_sqs(sqs_out, region)
     res = sns_publish(sns_in, region, polygon=geom)
     messages = sqs_listen(sqs_out, region)
     for m in messages:
         message = json.loads(m['Body'])
+        assert message['MessageAttributes']['status']['Value'] == 'succeeded',  f"Error from SQS {message['MessageAttributes']['error']['Value']}"
         aois = json.loads(message['MessageAttributes']['aois']['Value'])
         assert len(aois) == 1
         assert aois[0] == '1234'
-
-    clear_sqs(sqs_out, region)
 
 def test_add(tf_output, dynamo, aoi, geom, h3_indices):
     region = tf_output['aws_region']

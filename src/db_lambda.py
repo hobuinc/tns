@@ -241,7 +241,11 @@ def db_comp_handler(event, context):
         for e in event['Records']:
             sns_message = json.loads(e['body'])
             polygon_str = json.dumps(sns_message['MessageAttributes']['polygon']['Value'])
-            polygon = from_geojson(polygon_str)
+            try:
+                polygon = from_geojson(polygon_str)
+            except:
+                decomplicated_str = json.loads(polygon_str)
+                polygon = from_geojson(decomplicated_str)
 
             aoi_info = get_db_comp(dynamo, polygon, table_name)
 
@@ -261,6 +265,11 @@ def db_comp_handler(event, context):
                 'aois': {
                     'DataType': 'String.Array',
                     'StringValue': json.dumps(aoi_impact_list)
+                },
+                'status':
+                {
+                    'DataType': 'String',
+                    'StringValue': 'succeeded'
                 }
             },
             Message=json.dumps(aoi_impact_list)

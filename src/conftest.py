@@ -6,6 +6,7 @@ import boto3
 from time import sleep
 from pathlib import Path
 
+from db_lambda import delete_if_found
 
 @pytest.fixture(scope='session')
 def dynamo(tf_output):
@@ -14,6 +15,16 @@ def dynamo(tf_output):
     aws_region = tf_output['aws_region']
 
     yield boto3.client('dynamodb', region_name=aws_region)
+
+@pytest.fixture(scope='function')
+def cleanup(dynamo, tf_output):
+    table_name = tf_output['table_name']
+    aois_to_delete = []
+
+    yield aois_to_delete
+
+    for aoi in aois_to_delete:
+        delete_if_found(dynamo, table_name, aoi)
 
 @pytest.fixture(scope='session')
 def tf_dir():

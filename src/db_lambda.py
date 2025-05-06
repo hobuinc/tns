@@ -134,6 +134,7 @@ def db_delete_handler(event, context):
                 },
                 Message="Failed to deleted aoi {aoi}")
             print(f'Error response: {publish_res}')
+        delete_sqs_message(e, region)
 
 
 def db_add_handler(event, context):
@@ -222,6 +223,7 @@ def db_add_handler(event, context):
                 },
                 Message=f'Error:{e}')
             print(f'Error response: {publish_res}')
+        delete_sqs_message(e, region)
 
 def db_comp_handler(event, context):
     from shapely import from_geojson

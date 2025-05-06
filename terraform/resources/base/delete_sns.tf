@@ -7,7 +7,7 @@ resource aws_sns_topic db_delete_sns_in {
 }
 resource aws_sqs_queue db_delete_sqs_in {
     name = "tns_db_delete_sqs_input"
-    visibility_timeout_seconds=300
+    visibility_timeout_seconds=30
     redrive_policy = jsonencode({
         deadLetterTargetArn = aws_sqs_queue.db_delete_dlq_in.arn
         maxReceiveCount = 10

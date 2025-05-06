@@ -1,6 +1,7 @@
 import json
 import boto3
 import random
+from time import sleep
 
 from db_lambda import get_entries_by_aoi
 
@@ -38,6 +39,13 @@ def sns_publish(sns_arn, region, aoi=None, polygon=None):
     res = sns.publish(TopicArn=sns_arn, MessageAttributes=message_attributes, Message=f"{aoi}")
     return res
 
+def sqs_get_messages(sqs_arn, region):
+    sqs = boto3.client('sqs', region_name=region)
+    queue_name = sqs_arn.split(':')[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    return sqs.receive_message(QueueUrl=queue_url,
+            MessageAttributeNames=['All'], MaxNumberOfMessages=10, WaitTimeSeconds=10)
+
 def sqs_listen(sqs_arn, region, retries = 5):
     sqs = boto3.client('sqs', region_name=region)
     queue_name = sqs_arn.split(':')[-1]
@@ -59,6 +67,7 @@ def sqs_listen(sqs_arn, region, retries = 5):
 def test_big(tf_output, dynamo, aoi, geom, h3_indices, cleanup):
     region = tf_output['aws_region']
     sns_in = tf_output['db_add_sns_in']
+    sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
@@ -93,9 +102,15 @@ def test_big(tf_output, dynamo, aoi, geom, h3_indices, cleanup):
             retry_count = 0
             msg_count += 1
 
+    # should be no messages left in the input queue
+    sleep(30) # the visibility timeout we have to wait out to be sure
+    messages = sqs_get_messages(sqs_in, region)
+    assert 'Messages' not in messages
+
 def test_comp(tf_output, geom, db_fill, cleanup):
     region = tf_output['aws_region']
     sns_in = tf_output['db_comp_sns_in']
+    sqs_in = tf_output['db_comp_sqs_in']
     sqs_out = tf_output['db_comp_sqs_out']
     table_name = tf_output['table_name']
 
@@ -111,10 +126,16 @@ def test_comp(tf_output, geom, db_fill, cleanup):
         assert len(aois) == 1
         assert aois[0] == '1234'
 
+    # should be no messages left in the input queue
+    sleep(30) # the visibility timeout we have to wait out to be sure
+    messages = sqs_get_messages(sqs_in, region)
+    assert 'Messages' not in messages
+
 
 def test_add(tf_output, dynamo, aoi, geom, h3_indices, cleanup):
     region = tf_output['aws_region']
     sns_in = tf_output['db_add_sns_in']
+    sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
@@ -140,9 +161,15 @@ def test_add(tf_output, dynamo, aoi, geom, h3_indices, cleanup):
         for h in h3s:
             assert h in h3_indices
 
+    # should be no messages left in the input queue
+    sleep(30) # the visibility timeout we have to wait out to be sure
+    messages = sqs_get_messages(sqs_in, region)
+    assert 'Messages' not in messages
+
 def test_update(tf_output, db_fill, aoi, update_geom, updated_h3_indices, h3_indices, cleanup):
     region = tf_output['aws_region']
     sns_in = tf_output['db_add_sns_in']
+    sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
 
@@ -177,9 +204,15 @@ def test_update(tf_output, db_fill, aoi, update_geom, updated_h3_indices, h3_ind
         for h in h3s:
             assert h in updated_h3_indices
 
+    # should be no messages left in the input queue
+    sleep(30) # the visibility timeout we have to wait out to be sure
+    messages = sqs_get_messages(sqs_in, region)
+    assert 'Messages' not in messages
+
 def test_delete(tf_output, db_fill, aoi, h3_indices):
     region = tf_output['aws_region']
     sns_in = tf_output['db_delete_sns_in']
+    sqs_in = tf_output['db_delete_sqs_in']
     sqs_out = tf_output['db_delete_sqs_out']
     table_name = tf_output['table_name']
 
@@ -203,3 +236,8 @@ def test_delete(tf_output, db_fill, aoi, h3_indices):
     deleted_items = get_entries_by_aoi(dynamo, table_name, aoi)
     assert deleted_items['Count'] == 0
     assert len(deleted_items['Items']) == 0
+
+    # should be no messages left in the input queue
+    sleep(30) # the visibility timeout we have to wait out to be sure
+    messages = sqs_get_messages(sqs_in, region)
+    assert 'Messages' not in messages

@@ -134,6 +134,7 @@ def db_delete_handler(event, context):
                 },
                 Message="Failed to deleted aoi {aoi}")
             print(f'Error response: {publish_res}')
+        delete_sqs_message(e, region)
 
 
 def db_add_handler(event, context):
@@ -222,6 +223,7 @@ def db_add_handler(event, context):
                 },
                 Message=f'Error:{e}')
             print(f'Error response: {publish_res}')
+        delete_sqs_message(e, region)
 
 def db_comp_handler(event, context):
     from shapely import from_geojson
@@ -240,8 +242,12 @@ def db_comp_handler(event, context):
         # loop through queue messages, and delete once we're done with them
         for e in event['Records']:
             sns_message = json.loads(e['body'])
-            polygon_str = sns_message['MessageAttributes']['polygon']['Value']
-            polygon = from_geojson(polygon_str)
+            polygon_str = json.dumps(sns_message['MessageAttributes']['polygon']['Value'])
+            try:
+                polygon = from_geojson(polygon_str)
+            except:
+                decomplicated_str = json.loads(polygon_str)
+                polygon = from_geojson(decomplicated_str)
 
             aoi_info = get_db_comp(dynamo, polygon, table_name)
 
@@ -261,6 +267,11 @@ def db_comp_handler(event, context):
                 'aois': {
                     'DataType': 'String.Array',
                     'StringValue': json.dumps(aoi_impact_list)
+                },
+                'status':
+                {
+                    'DataType': 'String',
+                    'StringValue': 'succeeded'
                 }
             },
             Message=json.dumps(aoi_impact_list)

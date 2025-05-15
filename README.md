@@ -85,12 +85,12 @@ To run in development mode, you will create a base set of cloud resources needed
 
 ```
 ### VAR_FILE contents
-# env="dev"
+# env="test"
 # aws_region="us-east-1"
 # sts_lambda_role_name="" # this is the default
 
 ./scripts/up $VAR_FILE # deploy the dev environment
-pytest src/test_lambda.py # test against that dev environment
+pytest src/test_lambdas.py # test against that dev environment
 ```
 
 #### Deployed Mode
@@ -98,7 +98,7 @@ For deployment mode, you'll be deploying the full set of architecture, and then 
 
 ```
 ### VAR_FILE contents
-# env="dev"
+# env="test"
 # aws_region="us-east-1"
 # sts_lambda_role_name="TNS_Testing_Role" # this is the default
 

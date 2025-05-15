@@ -6,7 +6,7 @@ resource aws_sns_topic db_add_sns_in {
 }
 resource aws_sqs_queue db_add_sqs_in {
     name = "tns_db_add_sqs_input"
-    visibility_timeout_seconds=300
+    visibility_timeout_seconds=30
     redrive_policy = jsonencode({
         deadLetterTargetArn = aws_sqs_queue.db_add_dlq_in.arn
         maxReceiveCount = 10

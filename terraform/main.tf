@@ -32,6 +32,7 @@ module tns_lambdas {
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
     db_delete_sqs_in_arn =  module.tns_base.db_delete_sqs_in_arn
     db_delete_sns_out_arn = module.tns_base.db_delete_sns_out_arn
+    image_uri = module.tns_base.image_uri
 }
 
 ####################################
@@ -47,7 +48,7 @@ variable env {
     type = string
     default = "prod"
     validation {
-        condition = can(regex("^(prod|test)$", var.env))
+        condition = can(regex("^(prod|dev)$", var.env))
         error_message = "prod or test are only available env types."
     }
 }
@@ -63,6 +64,11 @@ variable sts_lambda_role_name {
     default=""
 }
 
+variable s3_bucket_name {
+    type = string
+    default = ""
+}
+
 #####################################
 ##            Outputs              ##
 #####################################
@@ -73,18 +79,21 @@ output aws_region {
 output table_name {
     value = module.tns_base.table_name
 }
+output s3_bucket_name {
+    value = module.tns_base.s3_bucket_name
+}
 
 #comp
-output db_comp_sqs_out {
+output db_compare_sqs_out {
     value = module.tns_base.db_comp_sqs_out_arn
 }
-output db_comp_sns_out {
+output db_compare_sns_out {
     value = module.tns_base.db_comp_sns_out_arn
 }
-output db_comp_sqs_in {
+output db_compare_sqs_in {
     value = module.tns_base.db_comp_sqs_in_arn
 }
-output db_comp_sns_in {
+output db_compare_sns_in {
     value = module.tns_base.db_comp_sns_in_arn
 }
 
@@ -114,6 +123,10 @@ output db_delete_sqs_in {
 }
 output db_delete_sqs_out {
     value = module.tns_base.db_delete_sqs_out_arn
+}
+
+output container {
+    value = var.env == "prod" ? module.tns_base.container : ""
 }
 
 ######################################

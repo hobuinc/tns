@@ -1,3 +1,6 @@
+variable image_uri {
+    type = string
+}
 variable table_name {
     type = string
 }

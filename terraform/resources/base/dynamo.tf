@@ -2,7 +2,7 @@ resource aws_dynamodb_table geodata_table {
     name = "tns_geodata_table"
     billing_mode = "PAY_PER_REQUEST"
     hash_key = "h3_id"
-    range_key = "aoi_and_model"
+    range_key = "pk_and_model"
 
     attribute {
         name = "h3_id"
@@ -10,13 +10,13 @@ resource aws_dynamodb_table geodata_table {
     }
 
     attribute {
-        name = "aoi_and_model"
+        name = "pk_and_model"
         type = "S"
     }
 
     global_secondary_index {
-        name = "aoi_and_model"
-        hash_key = "aoi_and_model"
+        name = "pk_and_model"
+        hash_key = "pk_and_model"
         non_key_attributes = ["geometry"]
         projection_type = "INCLUDE"
     }

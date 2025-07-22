@@ -24,6 +24,24 @@ resource aws_s3_bucket tns_bucket {
     bucket = "tns-geodata-bucket"
 }
 
+resource aws_s3_bucket_lifecycle_configuration action_lifecycles {
+    count = var.s3_bucket_name == "" ? 1 : 0
+    bucket = local.bucket_name
+    dynamic rule {
+        for_each = local.actions
+        content {
+            id = "${each.key}_${local.bucket_name}_lifecycle"
+            status = "Enabled"
+            filter {
+                prefix = "${each.key}/"
+            }
+            expiration {
+                days = 14
+            }
+        }
+    }
+}
+
 data aws_s3_bucket tns_bucket_premade {
     count = var.s3_bucket_name == "" ? 0 : 1
     bucket = var.s3_bucket_name
@@ -34,15 +52,12 @@ data aws_iam_policy_document sns_connect_policy {
     for_each = aws_sns_topic.sns_in
     statement {
         effect = "Allow"
-
+        actions   = ["SNS:Publish"]
+        resources = [each.value.arn]
         principals {
             type        = "Service"
             identifiers = ["s3.amazonaws.com"]
         }
-
-        actions   = ["SNS:Publish"]
-        resources = [each.value.arn]
-
         condition {
             test     = "ArnLike"
             variable = "aws:SourceArn"

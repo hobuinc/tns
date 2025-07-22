@@ -27,7 +27,7 @@ def get_message(q, aws_region, retries=0):
     return message
 
 
-def put_parquet(action, tf_output, polygon, aoi_and_model):
+def put_parquet(action, tf_output, polygon, pk_and_model):
     queue_arn = tf_output[f"db_{action}_sqs_in"]
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
@@ -36,7 +36,7 @@ def put_parquet(action, tf_output, polygon, aoi_and_model):
     s3 = boto3.client("s3", region_name=aws_region)
     sqs = boto3.client("sqs", region_name=aws_region)
 
-    df = pd.DataFrame(data={"aoi_and_model": [aoi_and_model], "geometry": [polygon]})
+    df = pd.DataFrame(data={"pk_and_model": [pk_and_model], "geometry": [polygon]})
     df_bytes = df.to_parquet()
     queue_name = queue_arn.split(":")[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -129,7 +129,7 @@ def updated_h3_indices():
 
 
 @pytest.fixture(scope="function")
-def aoi_and_model():
+def pk_and_model():
     yield "raster_1234"
 
 
@@ -149,8 +149,8 @@ def db_delete_sqs_in_arn(tf_output):
 
 
 @pytest.fixture(scope="function")
-def add_message(tf_output, region, geom, aoi_and_model):
-    yield put_parquet("add", tf_output, geom, aoi_and_model)
+def add_message(tf_output, region, geom, pk_and_model):
+    yield put_parquet("add", tf_output, geom, pk_and_model)
 
 
 @pytest.fixture(scope="function")
@@ -159,8 +159,8 @@ def add_event(add_message, tf_output):
 
 
 @pytest.fixture(scope="function")
-def update_message(tf_output, update_geom, aoi_and_model):
-    yield put_parquet("add", tf_output, update_geom, aoi_and_model)
+def update_message(tf_output, update_geom, pk_and_model):
+    yield put_parquet("add", tf_output, update_geom, pk_and_model)
 
 
 @pytest.fixture(scope="function")
@@ -169,8 +169,8 @@ def update_event(update_message, tf_output):
 
 
 @pytest.fixture(scope="function")
-def comp_message(tf_output, geom, aoi_and_model):
-    yield put_parquet("compare", tf_output, geom, aoi_and_model)
+def comp_message(tf_output, geom, pk_and_model):
+    yield put_parquet("compare", tf_output, geom, pk_and_model)
 
 
 @pytest.fixture(scope="function")
@@ -179,8 +179,8 @@ def comp_event(comp_message, tf_output):
 
 
 @pytest.fixture(scope="function")
-def delete_message(tf_output, geom, aoi_and_model):
-    yield put_parquet("delete", tf_output, geom, aoi_and_model)
+def delete_message(tf_output, geom, pk_and_model):
+    yield put_parquet("delete", tf_output, geom, pk_and_model)
 
 
 @pytest.fixture(scope="function")
@@ -189,7 +189,7 @@ def delete_event(delete_message, tf_output):
 
 
 @pytest.fixture(scope="function")
-def db_fill(tf_output, aoi_and_model, h3_indices, geom, updated_h3_indices):
+def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices):
     db_name = tf_output["table_name"]
     aws_region = tf_output["aws_region"]
     dynamo = boto3.client("dynamodb", region_name=aws_region)
@@ -197,13 +197,13 @@ def db_fill(tf_output, aoi_and_model, h3_indices, geom, updated_h3_indices):
     # make sure that old entries are deleted before using
     for pk in h3_indices:
         key = {
-            "aoi_and_model": {"S": aoi_and_model},
+            "pk_and_model": {"S": pk_and_model},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
     for pk in updated_h3_indices:
         key = {
-            "aoi_and_model": {"S": aoi_and_model},
+            "pk_and_model": {"S": pk_and_model},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
@@ -214,7 +214,7 @@ def db_fill(tf_output, aoi_and_model, h3_indices, geom, updated_h3_indices):
                 "PutRequest": {
                     "Item": {
                         "h3_id": {"S": pk},
-                        "aoi_and_model": {"S": aoi_and_model},
+                        "pk_and_model": {"S": pk_and_model},
                         "polygon": {"S": geom},
                     }
                 }
@@ -226,13 +226,13 @@ def db_fill(tf_output, aoi_and_model, h3_indices, geom, updated_h3_indices):
 
     for pk in h3_indices:
         key = {
-            "aoi_and_model": {"S": aoi_and_model},
+            "pk_and_model": {"S": pk_and_model},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
     for pk in updated_h3_indices:
         key = {
-            "aoi_and_model": {"S": aoi_and_model},
+            "pk_and_model": {"S": pk_and_model},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)

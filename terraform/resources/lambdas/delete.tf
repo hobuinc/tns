@@ -1,8 +1,4 @@
 resource aws_lambda_function db_delete_lambda_function {
-    # depends_on = [ data.archive_file.lambda_zip ]
-    # filename = local.zip_path
-    # handler = "db_lambda.db_delete_handler"
-
     function_name = "tns_delete_lambda"
     role = var.sts_lambda_role_name ==  "" ? aws_iam_role.sts_lambda_role[0].arn : data.aws_iam_role.sts_lambda_role[0].arn
     timeout=300

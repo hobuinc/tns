@@ -9,7 +9,6 @@ SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 export TF_DIR="$SCRIPT_DIR/../terraform"
 export TF_CLI_CONFIG_FILE="$TF_DIR/.terraformrc"
 export TF_PLUGIN_CACHE_DIR="$TF_DIR/.terraform/plugins"
-# export TF_PLUGIN_CACHE_DIR="$TF_DIR/tfplugins"
 export TF_PYTHON_DEPS_DIR="$SCRIPT_DIR/../build/lambda_deps"
 
 # remove leftovers from previous inits
@@ -40,17 +39,6 @@ provider_installation {
     include = [\"*/*\"]
   }
 }" > $TF_CLI_CONFIG_FILE
-
-# TODO: remove this section, no longer need with ecr.tf in place
-# echo "Installing python dependencies to $TF_PYTHON_DEPS_DIR"
-# mkdir -p $TF_PYTHON_DEPS_DIR
-# conda run -n $CONDA_ENV_NAME \
-#     pip install \
-#     --platform manylinux2014_x86_64 \
-#     --target $TF_PYTHON_DEPS_DIR \
-#     --python-version 3.12 \
-#     --only-binary=:all: boto3 shapely h3 parquet
-
 
 cd $CWD
 exit 1

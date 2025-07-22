@@ -13,6 +13,8 @@ provider "aws" {
 
 module tns_base {
     source = "./resources/base"
+    modify_bucket = var.modify_bucket
+    s3_bucket_name = var.s3_bucket_name
 }
 
 module tns_lambdas {
@@ -25,6 +27,8 @@ module tns_lambdas {
 
     table_name = module.tns_base.table_name
     table_arn = module.tns_base.table_arn
+    image_uri = module.tns_base.image_uri
+    bucket_name = module.tns_base.s3_bucket_name
 
     db_comp_sqs_in_arn = module.tns_base.db_comp_sqs_in_arn
     db_comp_sns_out_arn = module.tns_base.db_comp_sns_out_arn
@@ -32,7 +36,6 @@ module tns_lambdas {
     db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
     db_delete_sqs_in_arn =  module.tns_base.db_delete_sqs_in_arn
     db_delete_sns_out_arn = module.tns_base.db_delete_sns_out_arn
-    image_uri = module.tns_base.image_uri
 }
 
 ####################################
@@ -61,12 +64,17 @@ variable conda_env_name {
 #defaults of "" allow easier conditionals
 variable sts_lambda_role_name {
     type = string
-    default=""
+    default = ""
 }
 
 variable s3_bucket_name {
     type = string
     default = ""
+}
+
+variable modify_bucket {
+    type = bool
+    default = "false"
 }
 
 #####################################

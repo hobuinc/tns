@@ -16,6 +16,10 @@ resource aws_lambda_function db_comp_lambda_function {
             SNS_OUT_ARN: var.db_comp_sns_out_arn
         }
     }
+
+    lifecycle {
+        replace_triggered_by = [ null_resource.always_run.id ]
+    }
 }
 
 resource aws_lambda_event_source_mapping compare_event_map {

@@ -16,6 +16,9 @@ resource aws_lambda_function db_delete_lambda_function {
             SNS_OUT_ARN: var.db_delete_sns_out_arn
         }
     }
+    lifecycle {
+        replace_triggered_by = [ null_resource.always_run ]
+    }
 }
 
 resource aws_lambda_event_source_mapping delete_event_map {

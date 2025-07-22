@@ -1,4 +1,14 @@
 ## Lambda Execution Role ##
+variable bucket_name {
+    type = string
+}
+
+resource null_resource always_run {
+    triggers = {
+        timestamp = "${timestamp()}"
+    }
+}
+
 data aws_iam_role sts_lambda_role {
     count = var.sts_lambda_role_name == "" ? 0 : 1
     name = var.sts_lambda_role_name
@@ -79,7 +89,20 @@ resource aws_iam_role_policy lambda_policy {
                     "logs:PutLogEvents"
                 ]
                 Resource: "*"
+            },
+            {
+                Sid = "GetS3Object"
+                Effect = "Allow"
+                Action = [
+                    "s3:GetObject"
+                ],
+                Resource = [
+                    "arn:aws:s3:::${var.bucket_name}/add/*.parquet",
+                    "arn:aws:s3:::${var.bucket_name}/compare/*.parquet",
+                    "arn:aws:s3:::${var.bucket_name}/delete/*.parquet"
+                ]
             }
+
         ]
     })
 }

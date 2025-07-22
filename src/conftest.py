@@ -10,11 +10,33 @@ import pandas as pd
 
 from db_lambda import delete_if_found
 
+def clear_sqs(sqs_arn, region):
+    sqs = boto3.client('sqs', region_name=region)
+    queue_name = sqs_arn.split(':')[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    messages = []
+    while not len(messages):
+        res = sqs.receive_message(QueueUrl=queue_url,
+                MessageAttributeNames=['All'], MaxNumberOfMessages=10, WaitTimeSeconds=10)
+        if 'Messages' in res.keys():
+            messages = res['Messages']
+            for m in messages:
+                receipt_handle=m['ReceiptHandle']
+                sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        else:
+            break
+    return messages
 
-def get_message(q, aws_region, retries=0):
+def get_message(action, tf_output, retries=0):
+    queue_arn = tf_output[f"db_{action}_sqs_in"]
+    aws_region = tf_output["aws_region"]
+
     sqs = boto3.client("sqs", region_name=aws_region)
+    queue_name = queue_arn.split(":")[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
+
     message = sqs.receive_message(
-        QueueUrl=q, MaxNumberOfMessages=1, MessageSystemAttributeNames=["All"]
+        QueueUrl=queue_url, MaxNumberOfMessages=1, MessageSystemAttributeNames=["All"]
     )
     try:
         message = message["Messages"][0]
@@ -22,29 +44,23 @@ def get_message(q, aws_region, retries=0):
         if retries >= 5:
             raise RuntimeError("Failed to fetch SQS message from s3 put")
         sleep(1)
-        message = get_message(q, aws_region, retries + 1)
+        message = get_message(action, tf_output, retries + 1)
 
-    return message
+    yield message
+    clear_sqs(queue_arn, aws_region)
 
 
 def put_parquet(action, tf_output, polygon, pk_and_model):
-    queue_arn = tf_output[f"db_{action}_sqs_in"]
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
 
     s3 = boto3.client("s3", region_name=aws_region)
-    sqs = boto3.client("sqs", region_name=aws_region)
 
     df = pd.DataFrame(data={"pk_and_model": [pk_and_model], "geometry": [polygon]})
     df_bytes = df.to_parquet()
-    queue_name = queue_arn.split(":")[-1]
-    queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
 
-    s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
-
-    return get_message(queue_url, aws_region)
-
+    yield s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
 
 def get_event(message, action, tf_output):
     body = message["Body"]
@@ -150,7 +166,8 @@ def db_delete_sqs_in_arn(tf_output):
 
 @pytest.fixture(scope="function")
 def add_message(tf_output, region, geom, pk_and_model):
-    yield put_parquet("add", tf_output, geom, pk_and_model)
+    put_parquet("add", tf_output, geom, pk_and_model)
+    yield get_message("add", tf_output)
 
 
 @pytest.fixture(scope="function")
@@ -160,7 +177,8 @@ def add_event(add_message, tf_output):
 
 @pytest.fixture(scope="function")
 def update_message(tf_output, update_geom, pk_and_model):
-    yield put_parquet("add", tf_output, update_geom, pk_and_model)
+    put_parquet("add", tf_output, update_geom, pk_and_model)
+    yield get_message("add", tf_output)
 
 
 @pytest.fixture(scope="function")

@@ -6,6 +6,10 @@ variable s3_bucket_name {
     default     = ""
 }
 
+variable modify_bucket {
+    type = bool
+}
+
 locals {
     bucket_name = (
         var.s3_bucket_name == "" ?
@@ -25,15 +29,15 @@ resource aws_s3_bucket tns_bucket {
 }
 
 resource aws_s3_bucket_lifecycle_configuration action_lifecycles {
-    count = var.s3_bucket_name == "" ? 1 : 0
+    count = var.modify_bucket ? 1 : 0
     bucket = local.bucket_name
     dynamic rule {
         for_each = local.actions
         content {
-            id = "${each.key}_${local.bucket_name}_lifecycle"
+            id = "${rule.key}_${local.bucket_name}_lifecycle"
             status = "Enabled"
             filter {
-                prefix = "${each.key}/"
+                prefix = "${rule.key}/"
             }
             expiration {
                 days = 14

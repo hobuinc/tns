@@ -30,6 +30,7 @@ def delete_sqs_message(e, region):
 
 
 def get_pq_df(event):
+
     region = os.environ["AWS_REGION"]
     s3 = boto3.client("s3")
     pq_dfs = []
@@ -98,7 +99,7 @@ def get_db_comp(dynamo, polygon, table_name):
             ExpressionAttributeValues={":h3_val": {"S": h3_id}},
         )
         for i in res["Items"]:
-            aname = i["aoi_and_model"]["S"]
+            aname = i["pk_and_model"]["S"]
             if aname not in aoi_info.keys():
                 aoi_info[aname] = i["polygon"]["S"]
 
@@ -108,10 +109,10 @@ def get_db_comp(dynamo, polygon, table_name):
 def get_entries_by_aoi(dynamo, table_name, aoi):
     a = dynamo.scan(
         TableName=table_name,
-        IndexName="aoi_and_model",
-        FilterExpression="aoi_and_model = :aoi_and_model",
+        IndexName="pk_and_model",
+        FilterExpression="pk_and_model = :pk_and_model",
         ExpressionAttributeValues={
-            ":aoi_and_model": {"S": aoi},
+            ":pk_and_model": {"S": aoi},
         },
     )
     return a
@@ -134,7 +135,7 @@ def apply_delete(df):
     dynamo = boto3.client("dynamodb", region_name=region)
     sns = boto3.client("sns", region_name=region)
     try:
-        aoi = df.aoi_and_model
+        aoi = df.pk_and_model
         delete_if_found(dynamo, table_name, aoi)
 
         publish_res = sns.publish(
@@ -178,7 +179,7 @@ def apply_add(df):
     sns = boto3.client("sns", region_name=region)
     try:
         polygon_str = df.geometry
-        aoi = df.aoi_and_model
+        aoi = df.pk_and_model
         print("polygon_str", polygon_str)
         polygon = from_geojson(polygon_str)
         print("polygon")
@@ -194,7 +195,7 @@ def apply_add(df):
                     "PutRequest": {
                         "Item": {
                             "h3_id": {"S": pk},
-                            "aoi_and_model": {"S": aoi},
+                            "pk_and_model": {"S": aoi},
                             "polygon": {"S": polygon_str},
                         }
                     }
@@ -260,6 +261,10 @@ def apply_compare(df):
         publish_res = sns.publish(
             TopicArn=sns_out_arn,
             MessageAttributes={
+                "tile_id": {
+                    "DataType": "String",
+                    "StringValue": df.pk_and_model,
+                },
                 "aois": {
                     "DataType": "String.Array",
                     "StringValue": json.dumps(aoi_impact_list),

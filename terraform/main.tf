@@ -13,6 +13,8 @@ provider "aws" {
 
 module tns_base {
     source = "./resources/base"
+    modify_bucket = var.modify_bucket
+    s3_bucket_name = var.s3_bucket_name
 }
 
 module tns_lambdas {
@@ -25,6 +27,8 @@ module tns_lambdas {
 
     table_name = module.tns_base.table_name
     table_arn = module.tns_base.table_arn
+    image_uri = module.tns_base.image_uri
+    bucket_name = module.tns_base.s3_bucket_name
 
     db_comp_sqs_in_arn = module.tns_base.db_comp_sqs_in_arn
     db_comp_sns_out_arn = module.tns_base.db_comp_sns_out_arn
@@ -47,7 +51,7 @@ variable env {
     type = string
     default = "prod"
     validation {
-        condition = can(regex("^(prod|test)$", var.env))
+        condition = can(regex("^(prod|dev)$", var.env))
         error_message = "prod or test are only available env types."
     }
 }
@@ -60,7 +64,17 @@ variable conda_env_name {
 #defaults of "" allow easier conditionals
 variable sts_lambda_role_name {
     type = string
-    default=""
+    default = ""
+}
+
+variable s3_bucket_name {
+    type = string
+    default = ""
+}
+
+variable modify_bucket {
+    type = bool
+    default = "false"
 }
 
 #####################################
@@ -73,18 +87,21 @@ output aws_region {
 output table_name {
     value = module.tns_base.table_name
 }
+output s3_bucket_name {
+    value = module.tns_base.s3_bucket_name
+}
 
 #comp
-output db_comp_sqs_out {
+output db_compare_sqs_out {
     value = module.tns_base.db_comp_sqs_out_arn
 }
-output db_comp_sns_out {
+output db_compare_sns_out {
     value = module.tns_base.db_comp_sns_out_arn
 }
-output db_comp_sqs_in {
+output db_compare_sqs_in {
     value = module.tns_base.db_comp_sqs_in_arn
 }
-output db_comp_sns_in {
+output db_compare_sns_in {
     value = module.tns_base.db_comp_sns_in_arn
 }
 
@@ -114,6 +131,10 @@ output db_delete_sqs_in {
 }
 output db_delete_sqs_out {
     value = module.tns_base.db_delete_sqs_out_arn
+}
+
+output container {
+    value = var.env == "prod" ? module.tns_base.container : ""
 }
 
 ######################################

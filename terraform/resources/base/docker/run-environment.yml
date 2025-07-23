@@ -1,0 +1,10 @@
+name: 'tns-lambda'
+channels:
+  - conda-forge
+dependencies:
+  - boto3
+  - h3-py
+  - shapely
+  - pandas
+  - pip:
+    - pyarrow

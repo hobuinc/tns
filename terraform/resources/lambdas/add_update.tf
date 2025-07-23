@@ -1,11 +1,14 @@
 resource aws_lambda_function db_add_lambda_function {
-    depends_on = [ data.archive_file.lambda_zip ]
-    filename = local.zip_path
     function_name = "tns_db_add_lambda"
     role = var.sts_lambda_role_name ==  "" ? aws_iam_role.sts_lambda_role[0].arn : data.aws_iam_role.sts_lambda_role[0].arn
-    handler = "db_lambda.db_add_handler"
-    runtime = "python3.12"
     timeout=300
+
+    image_uri = var.image_uri
+    package_type="Image"
+    architectures = ["arm64"]
+    image_config {
+        command = ["tns_lambda.db_lambda.db_add_handler"]
+    }
 
     environment {
         variables = {
@@ -14,7 +17,7 @@ resource aws_lambda_function db_add_lambda_function {
         }
     }
     lifecycle {
-        replace_triggered_by = [ terraform_data.replacement ]
+        replace_triggered_by = [ null_resource.always_run ]
     }
 }
 

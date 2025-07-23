@@ -86,12 +86,12 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     clear_sqs(sqs_out, region)
     count = 5
     for n in range(count):
-        put_parquet("add", tf_output, geom, f'raster_{n}')
+        name = 'raster_{n}'
+        put_parquet("add", tf_output, geom, name)
         # sns_publish(sns_in, region, f'{n}', geom)
-        cleanup.append(n)
+        cleanup.append(name)
 
     msg_count = 0
-    retry_count = 0
     while msg_count < count:
         messages = sqs_listen(sqs_out, region)
         for msg in messages:
@@ -112,7 +112,6 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
                 assert h in h3_indices
 
             delete_sqs_message(msg, sqs_out, region)
-            retry_count = 0
             msg_count += 1
 
     # should be no messages left in the input queue

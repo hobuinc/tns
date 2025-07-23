@@ -7,7 +7,7 @@ resource aws_lambda_function db_add_lambda_function {
     package_type="Image"
     architectures = ["arm64"]
     image_config {
-        command = ["tns_lambda.db_lambda.db_comp_handler"]
+        command = ["tns_lambda.db_lambda.db_add_handler"]
     }
 
     environment {

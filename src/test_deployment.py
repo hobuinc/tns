@@ -80,15 +80,13 @@ def sqs_listen(sqs_arn, region, retries = 5):
 
 def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     region = tf_output['aws_region']
-    sns_in = tf_output['db_add_sns_in']
     sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
-    table_name = tf_output['table_name']
 
     clear_sqs(sqs_out, region)
     count = 5
     for n in range(count):
-        put_parquet("add", tf_output, geom, pk_and_model)
+        put_parquet("add", tf_output, geom, f'raster_{n}')
         # sns_publish(sns_in, region, f'{n}', geom)
         cleanup.append(n)
 
@@ -107,7 +105,7 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
             status = attrs['status']['Value']
             assert status == 'succeeded'
 
-            aoi = attrs['aoi']['Value']
+            assert attrs['aoi']['Value']
 
             h3s = json.loads(attrs['h3_indices']['Value'])
             for h in h3s:
@@ -124,10 +122,8 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
 
 def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
     region = tf_output['aws_region']
-    sns_in = tf_output['db_compare_sns_in']
     sqs_in = tf_output['db_compare_sqs_in']
     sqs_out = tf_output['db_compare_sqs_out']
-    table_name = tf_output['table_name']
 
     clear_sqs(sqs_out, region)
     put_parquet("compare", tf_output, geom, pk_and_model)
@@ -150,10 +146,8 @@ def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
 
 def test_add(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     region = tf_output['aws_region']
-    sns_in = tf_output['db_add_sns_in']
     sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
-    table_name = tf_output['table_name']
 
     clear_sqs(sqs_out, region)
     cleanup.append(pk_and_model)
@@ -184,7 +178,6 @@ def test_add(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
 
 def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indices, h3_indices, cleanup):
     region = tf_output['aws_region']
-    sns_in = tf_output['db_add_sns_in']
     sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
     table_name = tf_output['table_name']
@@ -195,7 +188,7 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     dynamo = boto3.client('dynamodb', region_name=region)
 
     og_items = get_entries_by_aoi(dynamo, table_name, pk_and_model)
-    og_h3 = [a['h3_idx']['S'] for a in og_items['Items']]
+    og_h3 = [a['h3_id']['S'] for a in og_items['Items']]
     assert len(og_h3) == 3
     for oh in og_h3:
         assert oh in h3_indices
@@ -214,7 +207,7 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
         assert status == 'succeeded'
 
         aoi = attrs['aoi']['Value']
-        assert aoi == '1234'
+        assert aoi == pk_and_model
 
         h3s = json.loads(attrs['h3_indices']['Value'])
         for h in h3s:
@@ -225,9 +218,8 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
 
-def test_delete(tf_output, db_fill, aoi, h3_indices):
+def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
     region = tf_output['aws_region']
-    sns_in = tf_output['db_delete_sns_in']
     sqs_in = tf_output['db_delete_sqs_in']
     sqs_out = tf_output['db_delete_sqs_out']
     table_name = tf_output['table_name']
@@ -236,20 +228,21 @@ def test_delete(tf_output, db_fill, aoi, h3_indices):
 
     dynamo = boto3.client('dynamodb', region_name=region)
 
-    og_items = get_entries_by_aoi(dynamo, table_name, aoi)
+    og_items = get_entries_by_aoi(dynamo, table_name, pk_and_model)
     assert og_items['Count'] == 3
     for i in og_items['Items']:
-        assert i['aoi_id']['N'] == f'{aoi}'
-        assert i['h3_idx']['S'] in h3_indices
+        assert i['pk_and_model']['S'] == f'{pk_and_model}'
+        assert i['h3_id']['S'] in h3_indices
 
-    sns_publish(sns_in, region, aoi)
+    # sns_publish(sns_in, region, pk_and_model)
+    put_parquet("delete", tf_output, geom, pk_and_model)
     messages = sqs_listen(sqs_out, region)
     for msg in messages:
         body = json.loads(msg['Body'])
         message_str = body['Message']
-        assert message_str == f'AOI: {aoi} deleted'
+        assert message_str == f'AOI: {pk_and_model} deleted'
 
-    deleted_items = get_entries_by_aoi(dynamo, table_name, aoi)
+    deleted_items = get_entries_by_aoi(dynamo, table_name, pk_and_model)
     assert deleted_items['Count'] == 0
     assert len(deleted_items['Items']) == 0
 

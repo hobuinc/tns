@@ -15,6 +15,10 @@ module tns_base {
     source = "./resources/base"
     modify_bucket = var.modify_bucket
     s3_bucket_name = var.s3_bucket_name
+<<<<<<< HEAD
+    ecr_image_uri = var.ecr_image_uri
+=======
+>>>>>>> origin/main
 }
 
 module tns_lambdas {
@@ -75,6 +79,14 @@ variable s3_bucket_name {
 variable modify_bucket {
     type = bool
     default = "false"
+<<<<<<< HEAD
+}
+
+variable ecr_image_uri {
+    type = string
+    default = ""
+=======
+>>>>>>> origin/main
 }
 
 #####################################

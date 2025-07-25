@@ -1,0 +1,75 @@
+#!/bin/bash
+
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+cd $SCRIPT_DIR
+DOCKER_DIR="../terraform/resources/base/docker"
+ARCH=arm64
+REPO=tns_ecr
+PYTHON_VERSION=3.12
+LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2024.05.01.10"
+
+set -e
+CONTAINER_NAME="$1"
+if [[ "$CONTAINER_NAME" == "" ]]
+then
+    CONTAINER_NAME="$REPO:$ARCH"
+    echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
+fi
+
+REGION=$AWS_DEFAULT_REGION
+if [[ "$region" == "" ]]
+then
+    REGION=us-west-2
+    echo "INFO: AWS_DEFAULT_REGION not set, setting REGION to $REGION"
+fi
+
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
+if [[ "$AWS_ACCOUNT_ID" == "" ]]
+then
+    echo "Unable to fetch identity from aws sts to name container!"
+    exit 1;
+fi
+# set Image URI
+FULL_CONTAINER_NAME="$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$CONTAINER_NAME"
+
+# Log into ECR with AWS Credentials
+COMMAND="aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+echo "$COMMAND"
+eval $COMMAND
+
+ECR_REPONAME=$(aws ecr describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+
+if [[ "$ECR_REPONAME" == "" ]]
+then
+    aws ecr create-repository --region $REGION --repository-name $REPO
+fi
+
+ECR_REPONAME=$(aws ecr describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+echo "Checking if we find ECR_REPONAME: $ECR_REPONAME"
+if [[ "$ECR_REPONAME" == "" ]]
+then
+    echo "Failed to create ECR repo $REPO"
+    exit 1
+fi
+
+cp -r "../src/" "$DOCKER_DIR/handlers/"
+echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
+docker buildx build --platform linux/${ARCH} \
+    --no-cache \
+    --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
+    --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
+    --build-arg RIE_ARCH=$ARCH \
+    --load \
+    -t ${FULL_CONTAINER_NAME} \
+    "$DOCKER_DIR/" \
+    -f "$DOCKER_DIR/Dockerfile"
+docker push ${FULL_CONTAINER_NAME}
+
+pass_fail=$?
+if [[ $pass_fail == 0 ]]
+then
+    echo "Successfully pushed to $FULL_CONTAINER_NAME.
+    Copy ecr_image_uri=\"$FULL_CONTAINER_NAME\" to your variables file for use in terraform."
+else
+    echo "Failed to push to $FULL_CONTAINER_NAME with error code $pass_fail"
+fi

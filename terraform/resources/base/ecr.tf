@@ -1,20 +1,38 @@
 data aws_region current { }
 data "aws_caller_identity" "current" { }
+<<<<<<< HEAD
+variable ecr_image_uri {
+    type=string
+}
+=======
+>>>>>>> origin/main
 
 locals {
     ecr_repository_name = "tns_ecr"
     arch = "arm64"
     python_version = "3.13"
+<<<<<<< HEAD
+    image_uri = (var.ecr_image_uri == "" ?
+        "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}" :
+        "${var.ecr_image_uri}"
+    )
+}
+
+resource aws_ecr_repository runner_ecr_repo {
+    count = var.ecr_image_uri == "" ? 1 : 0
+=======
     image_uri = "${aws_ecr_repository.runner_ecr_repo.repository_url}:${local.arch}"
 }
 
 resource aws_ecr_repository runner_ecr_repo {
+>>>>>>> origin/main
     name = local.ecr_repository_name
     image_tag_mutability = "MUTABLE"
     force_delete = true
 }
 
 resource null_resource ecr_image {
+    count = var.ecr_image_uri == "" ? 1 : 0
     triggers = {
         docker_file = md5(file("${path.module}/docker/Dockerfile"))
         environment_file = md5(file("${path.module}/docker/run-environment.yml"))
@@ -52,15 +70,16 @@ resource null_resource ecr_image {
 
 
 data aws_ecr_image runner_image {
-    repository_name = aws_ecr_repository.runner_ecr_repo.name
+    count = var.ecr_image_uri == "" ? 1 : 0
+    repository_name = aws_ecr_repository.runner_ecr_repo[0].name
     image_tag = local.arch
     depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
 }
 
-output container {
-    value = "${aws_ecr_repository.runner_ecr_repo.repository_url}:${local.arch}"
-}
+# output container {
+#     value = "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}"
+# }
 
 output image_uri {
-    value = data.aws_ecr_image.runner_image.image_uri
+    value = local.image_uri
 }

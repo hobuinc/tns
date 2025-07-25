@@ -15,6 +15,7 @@ module tns_base {
     source = "./resources/base"
     modify_bucket = var.modify_bucket
     s3_bucket_name = var.s3_bucket_name
+    ecr_image_uri = var.ecr_image_uri
 }
 
 module tns_lambdas {
@@ -77,6 +78,11 @@ variable modify_bucket {
     default = "false"
 }
 
+variable ecr_image_uri {
+    type = string
+    default = ""
+}
+
 #####################################
 ##            Outputs              ##
 #####################################
@@ -131,10 +137,6 @@ output db_delete_sqs_in {
 }
 output db_delete_sqs_out {
     value = module.tns_base.db_delete_sqs_out_arn
-}
-
-output container {
-    value = var.env == "prod" ? module.tns_base.container : ""
 }
 
 ######################################

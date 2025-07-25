@@ -1,13 +1,17 @@
 data aws_region current { }
 data "aws_caller_identity" "current" { }
+<<<<<<< HEAD
 variable ecr_image_uri {
     type=string
 }
+=======
+>>>>>>> origin/main
 
 locals {
     ecr_repository_name = "tns_ecr"
     arch = "arm64"
     python_version = "3.13"
+<<<<<<< HEAD
     image_uri = (var.ecr_image_uri == "" ?
         "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}" :
         "${var.ecr_image_uri}"
@@ -16,6 +20,12 @@ locals {
 
 resource aws_ecr_repository runner_ecr_repo {
     count = var.ecr_image_uri == "" ? 1 : 0
+=======
+    image_uri = "${aws_ecr_repository.runner_ecr_repo.repository_url}:${local.arch}"
+}
+
+resource aws_ecr_repository runner_ecr_repo {
+>>>>>>> origin/main
     name = local.ecr_repository_name
     image_tag_mutability = "MUTABLE"
     force_delete = true

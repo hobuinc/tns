@@ -88,7 +88,6 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     for n in range(count):
         name = f'raster_{n}'
         put_parquet("add", tf_output, geom, name)
-        # sns_publish(sns_in, region, f'{n}', geom)
         cleanup.append(name)
 
     msg_count = 0

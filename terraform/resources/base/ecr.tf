@@ -5,7 +5,7 @@ variable ecr_image_uri {
 }
 
 locals {
-    ecr_repository_name = "tns_ecr"
+    ecr_repository_name = "tns_sm_ecr"
     arch = "arm64"
     python_version = "3.13"
     image_uri = (var.ecr_image_uri == "" ?
@@ -23,6 +23,9 @@ resource aws_ecr_repository runner_ecr_repo {
 
 resource null_resource ecr_image {
     count = var.ecr_image_uri == "" ? 1 : 0
+    depends_on = [
+        aws_ecr_repository.runner_ecr_repo
+    ]
     triggers = {
         docker_file = md5(file("${path.module}/docker/Dockerfile"))
         environment_file = md5(file("${path.module}/docker/run-environment.yml"))
@@ -65,10 +68,6 @@ data aws_ecr_image runner_image {
     image_tag = local.arch
     depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
 }
-
-# output container {
-#     value = "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}"
-# }
 
 output image_uri {
     value = local.image_uri

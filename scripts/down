@@ -19,12 +19,3 @@ if [[ $? -eq 1 ]]; then
     echo "Failed to destroy terraform. Exiting."
     exit 1
 fi
-
-# Removing build files, will prompt for confirmation
-BUILD_PATH="${SCRIPT_DIR}/../build"
-read -p "Deleting ${BUILD_PATH}. You will need to run 'init' again to recreate these. Continue?(Y/n) " confirm
-if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
-    rm -rf $BUILD_PATH
-    exit 0
-fi
-exit 1

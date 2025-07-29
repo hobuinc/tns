@@ -9,7 +9,6 @@ SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 export TF_DIR="$SCRIPT_DIR/../terraform"
 export TF_CLI_CONFIG_FILE="$TF_DIR/.terraformrc"
 export TF_PLUGIN_CACHE_DIR="$TF_DIR/.terraform/plugins"
-export TF_PYTHON_DEPS_DIR="$SCRIPT_DIR/../build/lambda_deps"
 
 # remove leftovers from previous inits
 rm $TF_CLI_CONFIG_FILE

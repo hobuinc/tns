@@ -76,7 +76,8 @@ VAR_PATH=var-file.tfvars
 AWS_REGION=us-west-2
 REPO_NAME=tns_ecr
 ./scripts/docker_init ${REPO_NAME}
-# copy and paste the ecr image uri to your var file
+# copy paste the line below (with subbed ecr image uri) into variable file
+# ecr_image_uri="${ecr_image_uri}"
 ./scripts/up $VAR_PATH
 ```
 

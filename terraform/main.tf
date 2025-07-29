@@ -140,7 +140,7 @@ output db_delete_sqs_out {
 }
 
 output container {
-    value = var.env == "prod" ? module.tns_base.container : ""
+    value = var.env == "prod" ? module.tns_base.image_uri : ""
 }
 
 ######################################

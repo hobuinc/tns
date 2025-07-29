@@ -63,7 +63,20 @@ All of these variables have a default, so if you don't set them, that's okay. If
 To deploy the cloud infrastructure, run the `up` script with the path to your variables file as the argument.
 
 ```
-VAR_PATH="var-file.tfvars" # the path to the variables file you're using.
+VAR_PATH=var-file.tfvars # the path to the variables file you're using.
+./scripts/up $VAR_PATH
+```
+
+##### [Optional] Deploy Docker Container
+
+You can optionally build and push the docker container that all of the lambdas are built upon before building any other resources.
+
+```
+VAR_PATH=var-file.tfvars
+AWS_REGION=us-west-2
+REPO_NAME=tns_ecr
+./scripts/docker_init ${REPO_NAME}
+# copy and paste the ecr image uri to your var file
 ./scripts/up $VAR_PATH
 ```
 

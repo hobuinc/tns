@@ -19,7 +19,7 @@ def s3_read_parquet(sns_event, s3):
 
 def delete_sqs_message(e, region):
     sqs = boto3.client("sqs", region_name=region)
-    print("deleting from this event", e)
+    print("Deleting message from event, ", e)
     source_arn = e["eventSourceARN"]
     print("source_arn:", source_arn)
     queue_name = source_arn.split(":")[-1]

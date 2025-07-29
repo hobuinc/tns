@@ -86,7 +86,7 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     clear_sqs(sqs_out, region)
     count = 5
     for n in range(count):
-        name = 'raster_{n}'
+        name = f'raster_{n}'
         put_parquet("add", tf_output, geom, name)
         # sns_publish(sns_in, region, f'{n}', geom)
         cleanup.append(name)
@@ -174,6 +174,8 @@ def test_add(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     sleep(30) # the visibility timeout we have to wait out to be sure
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
 
 def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indices, h3_indices, cleanup):
     region = tf_output['aws_region']
@@ -216,6 +218,8 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     sleep(30) # the visibility timeout we have to wait out to be sure
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
 
 def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
     region = tf_output['aws_region']
@@ -249,3 +253,5 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
     sleep(30) # the visibility timeout we have to wait out to be sure
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)

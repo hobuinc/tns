@@ -17,7 +17,7 @@ then
 fi
 
 REGION=$AWS_DEFAULT_REGION
-if [[ "$region" == "" ]]
+if [[ "$REGION" == "" ]]
 then
     REGION=us-west-2
     echo "INFO: AWS_DEFAULT_REGION not set, setting REGION to $REGION"

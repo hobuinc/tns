@@ -37,12 +37,16 @@ def get_pq_df(event):
     for sqs_event in event["Records"]:
         body = json.loads(sqs_event["body"])
         message = json.loads(body["Message"])
+        # skip TestEvent
+        if "Event" in message and message["Event"] == "s3:TestEvent":
+            delete_sqs_message(sqs_event, region)
+            continue
         for sns_event in message["Records"]:
             pq_df = s3_read_parquet(sns_event, s3)
             pq_dfs.append(pq_df)
         delete_sqs_message(sqs_event, region)
 
-    return pd.concat(pq_dfs)
+    return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
 def cover_polygon_h3(polygon, resolution: int):

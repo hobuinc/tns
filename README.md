@@ -14,6 +14,7 @@ TNS is split into 4 sections of operation:
 2. Initializing
 3. Managing Infrastructure
 4. Testing
+5. Building Docker Image
 
 ### Installing Dependencies
 Create an environment that has packages specified in `environment.yaml`. If you choose to use `conda` for this, run `conda env create -f environment.yaml`. This will create a conda environment with the name `tns`. This environment is only needed on your local machine for the initial installation so that we can install python packages and run `terraform`.
@@ -105,3 +106,6 @@ For deployment mode, you'll be deploying the full set of architecture, and then 
 ./scripts/up $VAR_FILE # deploy the production environment
 pytest src/test_deployment.py
 ```
+
+#### Building the Docker image
+The docker image will need to be built and deployed separately from Terraform. This can be done by using `./scripts/docker_init`. You may need to first install QEMU by following the directions at https://docs.docker.com/build/building/multi-platform/#qemu. You may also need to set env variable AWS_DEFAULT_REGION="us-east-1". Once the container is built, copy the image uri into an ecr_image_uri variable in your terraform variables file. 

@@ -52,7 +52,7 @@ variable env {
     type = string
     default = "prod"
     validation {
-        condition = can(regex("^(prod|dev)$", var.env))
+        condition = can(regex("^(prod|test)$", var.env))
         error_message = "prod or test are only available env types."
     }
 }

@@ -8,11 +8,11 @@ LABEL MAINTAINER="Howard Butler <howard@hobu.co>"
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG TARGETVARIANT
-RUN printf "I'm building for TARGETPLATFORM=${TARGETPLATFORM}" \
-    && printf ", TARGETARCH=${TARGETARCH}" \
-    && printf ", TARGETVARIANT=${TARGETVARIANT} \n" \
-    && printf "With uname -s : " && uname -s \
-    && printf "and  uname -m : " && uname -mm
+RUN printf "I'm building for TARGETPLATFORM=${TARGETPLATFORM}"
+RUN printf ", TARGETARCH=${TARGETARCH}"
+RUN printf ", TARGETVARIANT=${TARGETVARIANT} \n"
+RUN printf "With uname -s : " && uname -s
+RUN printf "and  uname -m : " && uname -mm
 
 ENV CONDA_ENV_NAME "tns-lambda"
 ENV CONDAENV "/opt/conda/envs/${CONDA_ENV_NAME}"

@@ -46,8 +46,7 @@ def get_message(action, tf_output, retries=0):
         sleep(1)
         message = get_message(action, tf_output, retries + 1)
 
-    yield message
-    clear_sqs(queue_arn, aws_region)
+    return message
 
 
 def put_parquet(action, tf_output, polygon, pk_and_model):
@@ -60,7 +59,7 @@ def put_parquet(action, tf_output, polygon, pk_and_model):
     df = pd.DataFrame(data={"pk_and_model": [pk_and_model], "geometry": [polygon]})
     df_bytes = df.to_parquet()
 
-    yield s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
+    return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
 
 def get_event(message, action, tf_output):
     body = message["Body"]
@@ -188,7 +187,8 @@ def update_event(update_message, tf_output):
 
 @pytest.fixture(scope="function")
 def comp_message(tf_output, geom, pk_and_model):
-    yield put_parquet("compare", tf_output, geom, pk_and_model)
+    put_parquet("compare", tf_output, geom, pk_and_model)
+    yield get_message("compare", tf_output)
 
 
 @pytest.fixture(scope="function")
@@ -198,7 +198,8 @@ def comp_event(comp_message, tf_output):
 
 @pytest.fixture(scope="function")
 def delete_message(tf_output, geom, pk_and_model):
-    yield put_parquet("delete", tf_output, geom, pk_and_model)
+    put_parquet("delete", tf_output, geom, pk_and_model)
+    yield get_message("delete", tf_output)
 
 
 @pytest.fixture(scope="function")

@@ -86,7 +86,7 @@ def test_big(tf_output, dynamo, pk_and_model, geom, h3_indices, cleanup):
     clear_sqs(sqs_out, region)
     count = 5
     for n in range(count):
-        name = 'raster_{n}'
+        name = f'raster_{n}'
         put_parquet("add", tf_output, geom, name)
         # sns_publish(sns_in, region, f'{n}', geom)
         cleanup.append(name)

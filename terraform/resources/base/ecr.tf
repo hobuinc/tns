@@ -66,10 +66,6 @@ data aws_ecr_image runner_image {
     depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
 }
 
-# output container {
-#     value = "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}"
-# }
-
 output image_uri {
     value = local.image_uri
 }

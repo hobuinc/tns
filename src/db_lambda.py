@@ -3,18 +3,26 @@ import boto3
 import os
 import pandas as pd
 import io
+from line_profiler import profile
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
 
 # reuse connections and variables
-region = os.environ["AWS_REGION"]
-sns_out_arn = os.environ["SNS_OUT_ARN"]
-table_name = os.environ["DB_TABLE_NAME"]
-sns = boto3.client("sns", region_name=region)
-dynamo = boto3.client("dynamodb", region_name=region)
+def set_globals():
+    global SNS
+    global DYNAMO
+    global SNS_OUT_ARN
+    global TABLE_NAME
+    global REGION
+    SNS_OUT_ARN = os.environ["SNS_OUT_ARN"]
+    TABLE_NAME = os.environ["DB_TABLE_NAME"]
+    REGION = os.environ["AWS_REGION"]
+    SNS = boto3.client("sns", region_name=REGION)
+    DYNAMO = boto3.client("dynamodb", region_name=REGION)
 
 
+@profile
 def s3_read_parquet(sns_event, s3):
     s3_info = sns_event["s3"]
     bucket = s3_info["bucket"]["name"]
@@ -24,8 +32,9 @@ def s3_read_parquet(sns_event, s3):
     return pd.read_parquet(pq_bytes)
 
 
+@profile
 def delete_sqs_message(e):
-    sqs = boto3.client("sqs", region_name=region)
+    sqs = boto3.client("sqs", region_name=REGION)
     print("deleting from this event", e)
     source_arn = e["eventSourceARN"]
     print("source_arn:", source_arn)
@@ -36,6 +45,7 @@ def delete_sqs_message(e):
     return sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
+@profile
 def get_pq_df(event):
     s3 = boto3.client("s3")
     pq_dfs = []
@@ -54,6 +64,7 @@ def get_pq_df(event):
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
+@profile
 def cover_polygon_h3(polygon, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
@@ -74,6 +85,7 @@ def cover_polygon_h3(polygon, resolution: int):
     return result_set
 
 
+@profile
 def cover_shape_h3(shape, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input shape.
@@ -97,13 +109,14 @@ def cover_shape_h3(shape, resolution: int):
     return list(result_set)
 
 
+@profile
 def get_db_comp(polygon):
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
     for h3_id in part_keys:
-        res = dynamo.query(
-            TableName=table_name,
+        res = DYNAMO.query(
+            TableName=TABLE_NAME,
             KeyConditionExpression="h3_id = :h3_val",
             ExpressionAttributeValues={":h3_val": {"S": h3_id}},
         )
@@ -115,9 +128,10 @@ def get_db_comp(polygon):
     return aoi_info
 
 
+@profile
 def get_entries_by_aoi(aoi):
-    a = dynamo.scan(
-        TableName=table_name,
+    a = DYNAMO.scan(
+        TableName=TABLE_NAME,
         IndexName="pk_and_model",
         FilterExpression="pk_and_model = :pk_and_model",
         ExpressionAttributeValues={
@@ -127,22 +141,24 @@ def get_entries_by_aoi(aoi):
     return a
 
 
+@profile
 def delete_if_found(aoi):
-    scanned = get_entries_by_aoi(dynamo, table_name, aoi)
+    scanned = get_entries_by_aoi(DYNAMO, TABLE_NAME, aoi)
     if scanned["Count"] == 0:
         return
     for i in scanned["Items"]:
-        dynamo.delete_item(TableName=table_name, Key=i)
+        DYNAMO.delete_item(TableName=TABLE_NAME, Key=i)
     return
 
 
+@profile
 def apply_delete(df):
     try:
         aoi = df.pk_and_model
         delete_if_found(aoi)
 
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
+        publish_res = SNS.publish(
+            TopicArn=SNS_OUT_ARN,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {
@@ -155,8 +171,8 @@ def apply_delete(df):
 
         print(f"Successful response: {publish_res}")
     except Exception as e:
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
+        publish_res = SNS.publish(
+            TopicArn=SNS_OUT_ARN,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {"DataType": "String", "StringValue": "failed"},
@@ -167,12 +183,15 @@ def apply_delete(df):
         print(f"Error response: {publish_res}")
 
 
+@profile
 def db_delete_handler(event, context):
+    set_globals()
     print("event", event)
     pq_df = get_pq_df(event)
     pq_df.apply(apply_delete, axis=1)
 
 
+@profile
 def apply_add(df):
     try:
         polygon_str = df.geometry
@@ -187,7 +206,7 @@ def apply_add(df):
         keys = zip(part_keys, aoi_list)
 
         request = {
-            f"{table_name}": [
+            f"{TABLE_NAME}": [
                 {
                     "PutRequest": {
                         "Item": {
@@ -200,10 +219,10 @@ def apply_add(df):
                 for pk, aoi in keys
             ]
         }
-        dynamo.batch_write_item(RequestItems=request)
+        DYNAMO.batch_write_item(RequestItems=request)
 
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
+        publish_res = SNS.publish(
+            TopicArn=SNS_OUT_ARN,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "h3_indices": {
@@ -216,8 +235,8 @@ def apply_add(df):
         )
         print(f"Added AOI response: {publish_res}")
     except Exception as e:
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
+        publish_res = SNS.publish(
+            TopicArn=SNS_OUT_ARN,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {"DataType": "String", "StringValue": "failed"},
@@ -228,12 +247,15 @@ def apply_add(df):
         print(f"Error response: {publish_res}")
 
 
+@profile
 def db_add_handler(event, context):
+    set_globals()
     print("event", event)
     pq_df = get_pq_df(event)
 
     pq_df.apply(apply_add, axis=1)
 
+@profile
 def apply_compare(df):
     try:
         print('running apply_compare')
@@ -246,10 +268,9 @@ def apply_compare(df):
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
-
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
-            MessageAttributes={
+        sns_request_json = {
+            "TopicArn":SNS_OUT_ARN,
+            "MessageAttributes":{
                 "tile_id": {
                     "DataType": "String",
                     "StringValue": df.pk_and_model,
@@ -260,21 +281,45 @@ def apply_compare(df):
                 },
                 "status": {"DataType": "String", "StringValue": "succeeded"},
             },
-            Message=json.dumps(aoi_impact_list),
-        )
-        print(f"Publish response: {publish_res}")
-        return aoi_impact_list
+            "Message" :json.dumps(aoi_impact_list),
+        }
+
+        return sns_request_json
     except Exception as e:
         print("encountered exception during apply_compare")
-        publish_res = sns.publish(
-            TopicArn=sns_out_arn,
+        SNS.publish(
+            TopicArn=SNS_OUT_ARN,
             MessageAttributes={
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
             Message=f"Error:{e.args}",
         )
+        return {
 
+        }
+
+@profile
 def db_comp_handler(event, context):
+    set_globals()
     pq_df = get_pq_df(event)
-    return pq_df.apply(apply_compare, axis=1)
+    a = pq_df.apply(apply_compare, axis=1)
+    pq_df = pq_df.assign(aoi_impact_list=a)
+
+    # publish_res = SNS.publish(
+    #     TopicArn=SNS_OUT_ARN,
+    #     MessageAttributes={
+    #         "tile_id": {
+    #             "DataType": "String",
+    #             "StringValue": df.pk_and_model,
+    #         },
+    #         "aois": {
+    #             "DataType": "String.Array",
+    #             "StringValue": json.dumps(aoi_impact_list),
+    #         },
+    #         "status": {"DataType": "String", "StringValue": "succeeded"},
+    #     },
+    #     Message=json.dumps(aoi_impact_list),
+    # )
+    # print(f"Publish response: {publish_res}")
+    print(a)

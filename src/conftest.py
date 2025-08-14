@@ -53,10 +53,11 @@ def put_parquet(action, tf_output, polygon, pk_and_model):
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
+    rng = 100
 
     s3 = boto3.client("s3", region_name=aws_region)
 
-    df = pd.DataFrame(data={"pk_and_model": [pk_and_model], "geometry": [polygon]})
+    df = pd.DataFrame(data={"pk_and_model": [pk_and_model for n in range(rng)], "geometry": [polygon for n in range(rng)]})
     df_bytes = df.to_parquet()
 
     return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)

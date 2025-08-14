@@ -7,6 +7,13 @@ import io
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
 
+# reuse connections and variables
+region = os.environ["AWS_REGION"]
+sns_out_arn = os.environ["SNS_OUT_ARN"]
+table_name = os.environ["DB_TABLE_NAME"]
+sns = boto3.client("sns", region_name=region)
+dynamo = boto3.client("dynamodb", region_name=region)
+
 
 def s3_read_parquet(sns_event, s3):
     s3_info = sns_event["s3"]
@@ -17,7 +24,7 @@ def s3_read_parquet(sns_event, s3):
     return pd.read_parquet(pq_bytes)
 
 
-def delete_sqs_message(e, region):
+def delete_sqs_message(e):
     sqs = boto3.client("sqs", region_name=region)
     print("deleting from this event", e)
     source_arn = e["eventSourceARN"]
@@ -30,8 +37,6 @@ def delete_sqs_message(e, region):
 
 
 def get_pq_df(event):
-
-    region = os.environ["AWS_REGION"]
     s3 = boto3.client("s3")
     pq_dfs = []
     for sqs_event in event["Records"]:
@@ -39,12 +44,12 @@ def get_pq_df(event):
         message = json.loads(body["Message"])
         # skip TestEvent
         if "Event" in message and message["Event"] == "s3:TestEvent":
-            delete_sqs_message(sqs_event, region)
+            delete_sqs_message(sqs_event)
             continue
         for sns_event in message["Records"]:
             pq_df = s3_read_parquet(sns_event, s3)
             pq_dfs.append(pq_df)
-        delete_sqs_message(sqs_event, region)
+        delete_sqs_message(sqs_event)
 
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
@@ -92,7 +97,7 @@ def cover_shape_h3(shape, resolution: int):
     return list(result_set)
 
 
-def get_db_comp(dynamo, polygon, table_name):
+def get_db_comp(polygon):
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
@@ -110,7 +115,7 @@ def get_db_comp(dynamo, polygon, table_name):
     return aoi_info
 
 
-def get_entries_by_aoi(dynamo, table_name, aoi):
+def get_entries_by_aoi(aoi):
     a = dynamo.scan(
         TableName=table_name,
         IndexName="pk_and_model",
@@ -122,7 +127,7 @@ def get_entries_by_aoi(dynamo, table_name, aoi):
     return a
 
 
-def delete_if_found(dynamo, table_name, aoi):
+def delete_if_found(aoi):
     scanned = get_entries_by_aoi(dynamo, table_name, aoi)
     if scanned["Count"] == 0:
         return
@@ -132,15 +137,9 @@ def delete_if_found(dynamo, table_name, aoi):
 
 
 def apply_delete(df):
-    region = os.environ["AWS_REGION"]
-    table_name = os.environ["DB_TABLE_NAME"]
-    sns_out_arn = os.environ["SNS_OUT_ARN"]
-
-    dynamo = boto3.client("dynamodb", region_name=region)
-    sns = boto3.client("sns", region_name=region)
     try:
         aoi = df.pk_and_model
-        delete_if_found(dynamo, table_name, aoi)
+        delete_if_found(aoi)
 
         publish_res = sns.publish(
             TopicArn=sns_out_arn,
@@ -175,19 +174,13 @@ def db_delete_handler(event, context):
 
 
 def apply_add(df):
-    region = os.environ["AWS_REGION"]
-    table_name = os.environ["DB_TABLE_NAME"]
-    sns_out_arn = os.environ["SNS_OUT_ARN"]
-
-    dynamo = boto3.client("dynamodb", region_name=region)
-    sns = boto3.client("sns", region_name=region)
     try:
         polygon_str = df.geometry
         aoi = df.pk_and_model
         print("polygon_str", polygon_str)
         polygon = from_geojson(polygon_str)
         print("polygon")
-        delete_if_found(dynamo, table_name, aoi)
+        delete_if_found(aoi)
         # create new db entries for aoi-polygon combo
         part_keys = cover_shape_h3(polygon, 3)
         aoi_list = [aoi for s in part_keys]
@@ -243,23 +236,21 @@ def db_add_handler(event, context):
 
 def apply_compare(df):
     try:
-        region = os.environ["AWS_REGION"]
-        sns_out_arn = os.environ["SNS_OUT_ARN"]
-        table_name = os.environ["DB_TABLE_NAME"]
-
-        sns = boto3.client("sns", region_name=region)
-        dynamo = boto3.client("dynamodb", region_name=region)
+        print("getting geometry")
         polygon_str = df.geometry
         polygon = from_geojson(polygon_str)
-
-        aoi_info = get_db_comp(dynamo, polygon, table_name)
-
+        print("grabbed polygon string")
+        aoi_info = get_db_comp(polygon)
+        print("got aoi_info via get_db_comp")
         aoi_impact_list = []
+        print("converting to Polygon")
         upoly = Polygon(polygon)
+        print("looping through aoi_info items")
         for k, v in aoi_info.items():
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
+        print("done adding to aoi_impact_list")
 
         print("aois found: ", aoi_impact_list)
         publish_res = sns.publish(
@@ -277,9 +268,11 @@ def apply_compare(df):
             },
             Message=json.dumps(aoi_impact_list),
         )
+        print("published to sns")
         print(f"Publish response: {publish_res}")
         return aoi_impact_list
     except Exception as e:
+        print("encountered exception during apply_compare")
         publish_res = sns.publish(
             TopicArn=sns_out_arn,
             MessageAttributes={
@@ -292,4 +285,5 @@ def apply_compare(df):
 def db_comp_handler(event, context):
     print("event", event)
     pq_df = get_pq_df(event)
+    print("got pq df")
     return pq_df.apply(apply_compare, axis=1)

@@ -236,23 +236,17 @@ def db_add_handler(event, context):
 
 def apply_compare(df):
     try:
-        print("getting geometry")
+        print('running apply_compare')
         polygon_str = df.geometry
         polygon = from_geojson(polygon_str)
-        print("grabbed polygon string")
         aoi_info = get_db_comp(polygon)
-        print("got aoi_info via get_db_comp")
         aoi_impact_list = []
-        print("converting to Polygon")
         upoly = Polygon(polygon)
-        print("looping through aoi_info items")
         for k, v in aoi_info.items():
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
-        print("done adding to aoi_impact_list")
 
-        print("aois found: ", aoi_impact_list)
         publish_res = sns.publish(
             TopicArn=sns_out_arn,
             MessageAttributes={
@@ -268,7 +262,6 @@ def apply_compare(df):
             },
             Message=json.dumps(aoi_impact_list),
         )
-        print("published to sns")
         print(f"Publish response: {publish_res}")
         return aoi_impact_list
     except Exception as e:
@@ -283,7 +276,5 @@ def apply_compare(df):
         )
 
 def db_comp_handler(event, context):
-    print("event", event)
     pq_df = get_pq_df(event)
-    print("got pq df")
     return pq_df.apply(apply_compare, axis=1)

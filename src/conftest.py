@@ -52,7 +52,7 @@ def put_parquet(action, tf_output, polygon, pk_and_model):
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
-    rng = 2
+    rng = 1000
 
     s3 = boto3.client("s3", region_name=aws_region)
 

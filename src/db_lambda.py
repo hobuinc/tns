@@ -19,7 +19,6 @@ def set_globals(dynamo_cfg=None):
     global SNS_OUT_ARN
     global TABLE_NAME
     global REGION
-    global DDB_PROJECTION
     global unique_id_count
     global S3
     SNS_OUT_ARN = os.environ["SNS_OUT_ARN"]
@@ -27,7 +26,6 @@ def set_globals(dynamo_cfg=None):
     REGION = os.environ["AWS_REGION"]
     SNS = boto3.client("sns", region_name=REGION)
     S3 = boto3.client("s3", region_name=REGION)
-    DDB_PROJECTION = "h3_id, pk_and_model"
     unique_id_count = 0
     if dynamo_cfg:
         DYNAMO = boto3.client("dynamodb", region_name=REGION, config=dynamo_cfg)
@@ -125,16 +123,19 @@ def get_db_comp(polygon):
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
-    for h3_id in part_keys:
-        res = DYNAMO.query(
-            TableName=TABLE_NAME,
-            KeyConditionExpression="h3_id = :h3_val",
-            ExpressionAttributeValues={":h3_val": {"S": h3_id}},
-        )
-        for i in res["Items"]:
-            aname = i["pk_and_model"]["S"]
-            if aname not in aoi_info.keys():
-                aoi_info[aname] = i["polygon"]["S"]
+    try:
+        for h3_id in part_keys:
+            res = DYNAMO.query(
+                TableName=TABLE_NAME,
+                KeyConditionExpression="h3_id = :h3_val",
+                ExpressionAttributeValues={":h3_val": {"S": h3_id}},
+            )
+            for i in res["Items"]:
+                aname = i["pk_and_model"]["S"]
+                if aname not in aoi_info.keys():
+                    aoi_info[aname] = i["polygon"]["S"]
+    except Exception as e:
+        print(e)
 
     return aoi_info
 

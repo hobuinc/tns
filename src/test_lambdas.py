@@ -29,7 +29,7 @@ def test_comp(tf_output, comp_event, pk_and_model, db_fill):
     print(tf_output['db_compare_sns_out'])
 
     aois = db_comp_handler(comp_event, None)
-    assert aois == 2
+    assert aois == 1000
     clear_sqs(tf_output['db_compare_sqs_out'], tf_output['aws_region'])
     clear_sqs(tf_output['db_compare_sqs_in'], tf_output['aws_region'])
 

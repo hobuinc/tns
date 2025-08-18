@@ -3,31 +3,44 @@ import boto3
 import os
 import pandas as pd
 import io
+import h3
 from line_profiler import profile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from botocore.config import Config
+from itertools import islice
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
 
 # reuse connections and variables
-def set_globals():
+def set_globals(dynamo_cfg=None):
     global SNS
     global DYNAMO
     global SNS_OUT_ARN
     global TABLE_NAME
     global REGION
+    global DDB_PROJECTION
+    global unique_id_count
+    global S3
     SNS_OUT_ARN = os.environ["SNS_OUT_ARN"]
     TABLE_NAME = os.environ["DB_TABLE_NAME"]
     REGION = os.environ["AWS_REGION"]
     SNS = boto3.client("sns", region_name=REGION)
-    DYNAMO = boto3.client("dynamodb", region_name=REGION)
+    S3 = boto3.client("s3", region_name=REGION)
+    DDB_PROJECTION = "h3_id, pk_and_model"
+    unique_id_count = 0
+    if dynamo_cfg:
+        DYNAMO = boto3.client("dynamodb", region_name=REGION, config=dynamo_cfg)
+    else:
+        DYNAMO = boto3.client("dynamodb", region_name=REGION)
 
 
 @profile
-def s3_read_parquet(sns_event, s3):
+def s3_read_parquet(sns_event):
     s3_info = sns_event["s3"]
     bucket = s3_info["bucket"]["name"]
     key = s3_info["object"]["key"]
-    file = s3.get_object(Bucket=bucket, Key=key)["Body"]
+    file = S3.get_object(Bucket=bucket, Key=key)["Body"]
     pq_bytes = io.BytesIO(file.read())
     return pd.read_parquet(pq_bytes)
 
@@ -47,7 +60,6 @@ def delete_sqs_message(e):
 
 @profile
 def get_pq_df(event):
-    s3 = boto3.client("s3")
     pq_dfs = []
     for sqs_event in event["Records"]:
         body = json.loads(sqs_event["body"])
@@ -57,7 +69,7 @@ def get_pq_df(event):
             delete_sqs_message(sqs_event)
             continue
         for sns_event in message["Records"]:
-            pq_df = s3_read_parquet(sns_event, s3)
+            pq_df = s3_read_parquet(sns_event)
             pq_dfs.append(pq_df)
         delete_sqs_message(sqs_event)
 
@@ -69,7 +81,6 @@ def cover_polygon_h3(polygon, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
     """
-    import h3
 
     result_set = set()
     # Hexes for vertices
@@ -143,7 +154,7 @@ def get_entries_by_aoi(aoi):
 
 @profile
 def delete_if_found(aoi):
-    scanned = get_entries_by_aoi(DYNAMO, TABLE_NAME, aoi)
+    scanned = get_entries_by_aoi(aoi)
     if scanned["Count"] == 0:
         return
     for i in scanned["Items"]:
@@ -268,8 +279,11 @@ def apply_compare(df):
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
+        if not aoi_impact_list:
+            return pd.NA
+        global unique_id_count
         sns_request_json = {
-            "TopicArn":SNS_OUT_ARN,
+            "Id": f"{df.pk_and_model}-{unique_id_count}",
             "MessageAttributes":{
                 "tile_id": {
                     "DataType": "String",
@@ -283,10 +297,10 @@ def apply_compare(df):
             },
             "Message" :json.dumps(aoi_impact_list),
         }
-
+        unique_id_count = unique_id_count + 1
         return sns_request_json
     except Exception as e:
-        print("encountered exception during apply_compare")
+        print(f"encountered exception during apply_compare: {e}")
         SNS.publish(
             TopicArn=SNS_OUT_ARN,
             MessageAttributes={
@@ -295,31 +309,43 @@ def apply_compare(df):
             },
             Message=f"Error:{e.args}",
         )
-        return {
+        return pd.NA
 
-        }
+@profile
+def set_dynamo_config(query_workers):
+    return Config(
+        retries={"max_attempts": 8, "mode": "adaptive"},
+        tcp_keepalive=True,
+        read_timeout=30,
+        connect_timeout=10
+    )
+
+@profile
+def chunk(iterable, size):
+    it = iter(iterable)
+    while True:
+        batch = list(islice(it, size))
+        if not batch:
+            return
+        yield batch
 
 @profile
 def db_comp_handler(event, context):
-    set_globals()
+    QUERY_WORKERS = 2
+    dynamo_cfg = set_dynamo_config(QUERY_WORKERS)
+    set_globals(dynamo_cfg)
     pq_df = get_pq_df(event)
-    a = pq_df.apply(apply_compare, axis=1)
-    pq_df = pq_df.assign(aoi_impact_list=a)
+    pq_df_results = pq_df.apply(apply_compare, axis=1)
+    pq_df_results = pq_df_results.dropna()
 
-    # publish_res = SNS.publish(
-    #     TopicArn=SNS_OUT_ARN,
-    #     MessageAttributes={
-    #         "tile_id": {
-    #             "DataType": "String",
-    #             "StringValue": df.pk_and_model,
-    #         },
-    #         "aois": {
-    #             "DataType": "String.Array",
-    #             "StringValue": json.dumps(aoi_impact_list),
-    #         },
-    #         "status": {"DataType": "String", "StringValue": "succeeded"},
-    #     },
-    #     Message=json.dumps(aoi_impact_list),
-    # )
-    # print(f"Publish response: {publish_res}")
-    print(a)
+    sns_messages = pq_df_results.tolist()
+
+    for batch in chunk(sns_messages, 10):
+        resp = SNS.publish_batch(
+            TopicArn=SNS_OUT_ARN,
+            PublishBatchRequestEntries=batch
+        )
+        if resp.get("Failed"):
+            pass
+    # return number of tiles which were associated with at least 1 subscription
+    return len(pq_df_results.index)

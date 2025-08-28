@@ -10,22 +10,28 @@ import pandas as pd
 
 from db_lambda import delete_if_found
 
+
 def clear_sqs(sqs_arn, region):
-    sqs = boto3.client('sqs', region_name=region)
-    queue_name = sqs_arn.split(':')[-1]
-    queue_url = sqs.get_queue_url(QueueName=queue_name)['QueueUrl']
+    sqs = boto3.client("sqs", region_name=region)
+    queue_name = sqs_arn.split(":")[-1]
+    queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
     messages = []
     while not len(messages):
-        res = sqs.receive_message(QueueUrl=queue_url,
-                MessageAttributeNames=['All'], MaxNumberOfMessages=10, WaitTimeSeconds=10)
-        if 'Messages' in res.keys():
-            messages = res['Messages']
+        res = sqs.receive_message(
+            QueueUrl=queue_url,
+            MessageAttributeNames=["All"],
+            MaxNumberOfMessages=10,
+            WaitTimeSeconds=10,
+        )
+        if "Messages" in res.keys():
+            messages = res["Messages"]
             for m in messages:
-                receipt_handle=m['ReceiptHandle']
+                receipt_handle = m["ReceiptHandle"]
                 sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
         else:
             break
     return messages
+
 
 def get_message(action, tf_output, retries=0):
     queue_arn = tf_output[f"db_{action}_sqs_in"]
@@ -49,18 +55,23 @@ def get_message(action, tf_output, retries=0):
     return message
 
 
-def put_parquet(action, tf_output, polygon, pk_and_model):
+def put_parquet(action, tf_output, polygon, pk_and_model, amt=1):
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
-    rng = 100
 
     s3 = boto3.client("s3", region_name=aws_region)
 
-    df = pd.DataFrame(data={"pk_and_model": [pk_and_model for n in range(rng)], "geometry": [polygon for n in range(rng)]})
+    df = pd.DataFrame(
+        data={
+            "pk_and_model": [pk_and_model for n in range(amt)],
+            "geometry": [polygon for n in range(amt)],
+        }
+    )
     df_bytes = df.to_parquet()
 
     return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
+
 
 def get_event(message, action, tf_output):
     body = message["Body"]
@@ -188,7 +199,7 @@ def update_event(update_message, tf_output):
 
 @pytest.fixture(scope="function")
 def comp_message(tf_output, geom, pk_and_model):
-    put_parquet("compare", tf_output, geom, pk_and_model)
+    put_parquet("compare", tf_output, geom, pk_and_model, amt=1000)
     yield get_message("compare", tf_output)
 
 

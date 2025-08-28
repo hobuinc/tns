@@ -27,7 +27,9 @@ def test_comp(tf_output, comp_event, pk_and_model, db_fill):
     os.environ['DB_TABLE_NAME'] = tf_output['table_name']
 
     aois = db_comp_handler(comp_event, None)
-    assert len(aois) == 1
+    assert len(aois) == 1000
+    for a in aois:
+        assert a['Message'] == '["raster_1234"]'
     clear_sqs(tf_output['db_compare_sqs_out'], tf_output['aws_region'])
     clear_sqs(tf_output['db_compare_sqs_in'], tf_output['aws_region'])
 

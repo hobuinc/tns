@@ -3,6 +3,8 @@ import boto3
 import os
 import pandas as pd
 import io
+from uuid import uuid4
+
 from line_profiler import profile
 
 from shapely.geometry import Polygon, MultiPolygon
@@ -257,6 +259,7 @@ def db_add_handler(event, context):
 
 @profile
 def apply_compare(df):
+    name = uuid4()
     try:
         print('running apply_compare')
         polygon_str = df.geometry
@@ -268,35 +271,33 @@ def apply_compare(df):
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
+
         sns_request_json = {
-            "TopicArn":SNS_OUT_ARN,
-            "MessageAttributes":{
-                "tile_id": {
-                    "DataType": "String",
-                    "StringValue": df.pk_and_model,
-                },
-                "aois": {
-                    "DataType": "String.Array",
-                    "StringValue": json.dumps(aoi_impact_list),
-                },
+            'Id': f'compare-{name}',
+            "Message" :json.dumps(aoi_impact_list),
+            'MessageStructure': 'string',
+            "MessageAttributes": {
+                "tile_id": { "DataType": "String", "StringValue": df.pk_and_model, },
+                "aois": { "DataType": "String.Array", "StringValue": json.dumps(aoi_impact_list), },
                 "status": {"DataType": "String", "StringValue": "succeeded"},
             },
-            "Message" :json.dumps(aoi_impact_list),
+            'MessageDeduplicationId': f'{name}',
+            'MessageGroupId': 'compare'
         }
 
         return sns_request_json
     except Exception as e:
         print("encountered exception during apply_compare")
-        SNS.publish(
-            TopicArn=SNS_OUT_ARN,
-            MessageAttributes={
+        return {
+            'Id': f'compare-{name}',
+            'Message': f"Error:{e.args}",
+            'MessageStructure': 'string',
+            'MessageAttributes': {
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            Message=f"Error:{e.args}",
-        )
-        return {
-
+            'MessageDeduplicationId': f'{name}',
+            'MessageGroupId': 'compare'
         }
 
 @profile
@@ -304,22 +305,10 @@ def db_comp_handler(event, context):
     set_globals()
     pq_df = get_pq_df(event)
     a = pq_df.apply(apply_compare, axis=1)
-    pq_df = pq_df.assign(aoi_impact_list=a)
-
-    # publish_res = SNS.publish(
-    #     TopicArn=SNS_OUT_ARN,
-    #     MessageAttributes={
-    #         "tile_id": {
-    #             "DataType": "String",
-    #             "StringValue": df.pk_and_model,
-    #         },
-    #         "aois": {
-    #             "DataType": "String.Array",
-    #             "StringValue": json.dumps(aoi_impact_list),
-    #         },
-    #         "status": {"DataType": "String", "StringValue": "succeeded"},
-    #     },
-    #     Message=json.dumps(aoi_impact_list),
-    # )
-    # print(f"Publish response: {publish_res}")
-    print(a)
+    for low in range(0, a.size, 10):
+        vals = a[low:low+10].tolist()
+        SNS.publish_batch(
+            TopicArn=SNS_OUT_ARN,
+            PublishBatchRequestEntries=vals
+        )
+    return a

@@ -7,5 +7,4 @@ dependencies:
   - shapely
   - pandas
   - line_profiler
-  - pip:
-    - pyarrow
+  - pyarrow

@@ -4,7 +4,6 @@ import os
 import pandas as pd
 import io
 import h3
-from line_profiler import profile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from botocore.config import Config
 from itertools import islice
@@ -33,7 +32,6 @@ def set_globals(dynamo_cfg=None):
         DYNAMO = boto3.client("dynamodb", region_name=REGION)
 
 
-@profile
 def s3_read_parquet(sns_event):
     s3_info = sns_event["s3"]
     bucket = s3_info["bucket"]["name"]
@@ -43,7 +41,6 @@ def s3_read_parquet(sns_event):
     return pd.read_parquet(pq_bytes)
 
 
-@profile
 def delete_sqs_message(e):
     sqs = boto3.client("sqs", region_name=REGION)
     print("deleting from this event", e)
@@ -56,7 +53,6 @@ def delete_sqs_message(e):
     return sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
-@profile
 def get_pq_df(event):
     pq_dfs = []
     for sqs_event in event["Records"]:
@@ -74,7 +70,6 @@ def get_pq_df(event):
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
-@profile
 def cover_polygon_h3(polygon, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
@@ -94,7 +89,6 @@ def cover_polygon_h3(polygon, resolution: int):
     return result_set
 
 
-@profile
 def cover_shape_h3(shape, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input shape.
@@ -118,29 +112,24 @@ def cover_shape_h3(shape, resolution: int):
     return list(result_set)
 
 
-@profile
 def get_db_comp(polygon):
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
-    try:
-        for h3_id in part_keys:
-            res = DYNAMO.query(
-                TableName=TABLE_NAME,
-                KeyConditionExpression="h3_id = :h3_val",
-                ExpressionAttributeValues={":h3_val": {"S": h3_id}},
-            )
-            for i in res["Items"]:
-                aname = i["pk_and_model"]["S"]
-                if aname not in aoi_info.keys():
-                    aoi_info[aname] = i["polygon"]["S"]
-    except Exception as e:
-        print(e)
+    for h3_id in part_keys:
+        res = DYNAMO.query(
+            TableName=TABLE_NAME,
+            KeyConditionExpression="h3_id = :h3_val",
+            ExpressionAttributeValues={":h3_val": {"S": h3_id}},
+        )
+        for i in res["Items"]:
+            aname = i["pk_and_model"]["S"]
+            if aname not in aoi_info.keys():
+                aoi_info[aname] = i["polygon"]["S"]
 
     return aoi_info
 
 
-@profile
 def get_entries_by_aoi(aoi):
     a = DYNAMO.scan(
         TableName=TABLE_NAME,
@@ -153,7 +142,6 @@ def get_entries_by_aoi(aoi):
     return a
 
 
-@profile
 def delete_if_found(aoi):
     scanned = get_entries_by_aoi(aoi)
     if scanned["Count"] == 0:
@@ -163,7 +151,6 @@ def delete_if_found(aoi):
     return
 
 
-@profile
 def apply_delete(df):
     try:
         aoi = df.pk_and_model
@@ -190,12 +177,11 @@ def apply_delete(df):
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            Message="Failed to deleted aoi {aoi}",
+            Message="Failed to delete aoi {aoi}",
         )
         print(f"Error response: {publish_res}")
 
 
-@profile
 def db_delete_handler(event, context):
     set_globals()
     print("event", event)
@@ -203,7 +189,6 @@ def db_delete_handler(event, context):
     pq_df.apply(apply_delete, axis=1)
 
 
-@profile
 def apply_add(df):
     try:
         polygon_str = df.geometry
@@ -259,7 +244,6 @@ def apply_add(df):
         print(f"Error response: {publish_res}")
 
 
-@profile
 def db_add_handler(event, context):
     set_globals()
     print("event", event)
@@ -267,7 +251,6 @@ def db_add_handler(event, context):
 
     pq_df.apply(apply_add, axis=1)
 
-@profile
 def apply_compare(df):
     try:
         print('running apply_compare')
@@ -312,7 +295,6 @@ def apply_compare(df):
         )
         return pd.NA
 
-@profile
 def set_dynamo_config(query_workers):
     return Config(
         retries={"max_attempts": 8, "mode": "adaptive"},
@@ -321,7 +303,6 @@ def set_dynamo_config(query_workers):
         connect_timeout=10
     )
 
-@profile
 def chunk(iterable, size):
     it = iter(iterable)
     while True:
@@ -330,7 +311,6 @@ def chunk(iterable, size):
             return
         yield batch
 
-@profile
 def db_comp_handler(event, context):
     QUERY_WORKERS = 2
     dynamo_cfg = set_dynamo_config(QUERY_WORKERS)

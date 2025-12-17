@@ -41,4 +41,3 @@ provider_installation {
 }" > $TF_CLI_CONFIG_FILE
 
 cd $CWD
-exit 1

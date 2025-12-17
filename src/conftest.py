@@ -40,7 +40,6 @@ def get_message(action, tf_output, retries=0):
     sqs = boto3.client("sqs", region_name=aws_region)
     queue_name = queue_arn.split(":")[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
-
     message = sqs.receive_message(
         QueueUrl=queue_url, MaxNumberOfMessages=1, MessageSystemAttributeNames=["All"]
     )
@@ -69,7 +68,6 @@ def put_parquet(action, tf_output, polygon, pk_and_model, amt=1):
         }
     )
     df_bytes = df.to_parquet()
-
     return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
 
 
@@ -107,14 +105,13 @@ def dynamo(tf_output):
 
 
 @pytest.fixture(scope="function")
-def cleanup(dynamo, tf_output):
-    table_name = tf_output["table_name"]
+def cleanup(tf_output):
     aois_to_delete = []
 
     yield aois_to_delete
 
     for a in aois_to_delete:
-        delete_if_found(dynamo, table_name, a)
+        delete_if_found(a)
 
 
 @pytest.fixture(scope="session")

@@ -6,5 +6,4 @@ dependencies:
   - h3-py
   - shapely
   - pandas
-  - pip:
-    - pyarrow
+  - pyarrow

@@ -2,7 +2,7 @@
 CMD="terraform apply"
 
 VAR_PATH=$1
-if [[ $VAR_PATH != "" ]]; then
+if [[ "${VAR_PATH}" != "" ]]; then
     VAR_PATH=$(realpath $VAR_PATH)
     echo "VAR_PATH adjusted to ${VAR_PATH}"
     CMD="${CMD} --var-file ${VAR_PATH}"

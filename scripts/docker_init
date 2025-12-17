@@ -5,8 +5,8 @@ cd $SCRIPT_DIR
 DOCKER_DIR="../terraform/resources/base/docker"
 ARCH=arm64
 REPO=tns_ecr
-PYTHON_VERSION=3.12
-LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2024.05.01.10"
+PYTHON_VERSION=3.13
+LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.10.05.11-arm64"
 
 set -e
 CONTAINER_NAME="$1"

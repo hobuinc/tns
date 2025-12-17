@@ -1,77 +1,56 @@
 import json
-import boto3
-import os
 import pandas as pd
 import io
+import h3
+from botocore.config import Config
+from config import CloudConfig
 from uuid import uuid4
-
-from line_profiler import profile
+from itertools import islice
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
 
-# reuse connections and variables
-def set_globals():
-    global SNS
-    global DYNAMO
-    global SNS_OUT_ARN
-    global TABLE_NAME
-    global REGION
-    SNS_OUT_ARN = os.environ["SNS_OUT_ARN"]
-    TABLE_NAME = os.environ["DB_TABLE_NAME"]
-    REGION = os.environ["AWS_REGION"]
-    SNS = boto3.client("sns", region_name=REGION)
-    DYNAMO = boto3.client("dynamodb", region_name=REGION)
-
-
-@profile
-def s3_read_parquet(sns_event, s3):
+def s3_read_parquet(sns_event, config: CloudConfig):
     s3_info = sns_event["s3"]
     bucket = s3_info["bucket"]["name"]
     key = s3_info["object"]["key"]
-    file = s3.get_object(Bucket=bucket, Key=key)["Body"]
+    file = config.s3.get_object(Bucket=bucket, Key=key)["Body"]
     pq_bytes = io.BytesIO(file.read())
     return pd.read_parquet(pq_bytes)
 
 
-@profile
-def delete_sqs_message(e):
-    sqs = boto3.client("sqs", region_name=REGION)
+def delete_sqs_message(e, config: CloudConfig):
     print("deleting from this event", e)
     source_arn = e["eventSourceARN"]
     print("source_arn:", source_arn)
     queue_name = source_arn.split(":")[-1]
     print("queue name:", queue_name)
-    queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
+    queue_url = config.sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
     receipt_handle = e["receiptHandle"]
-    return sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+    return config.sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
-@profile
-def get_pq_df(event):
-    s3 = boto3.client("s3")
+def get_pq_df(event, config: CloudConfig):
     pq_dfs = []
     for sqs_event in event["Records"]:
         body = json.loads(sqs_event["body"])
         message = json.loads(body["Message"])
         # skip TestEvent
         if "Event" in message and message["Event"] == "s3:TestEvent":
-            delete_sqs_message(sqs_event)
+            delete_sqs_message(sqs_event, config)
             continue
         for sns_event in message["Records"]:
-            pq_df = s3_read_parquet(sns_event, s3)
+            pq_df = s3_read_parquet(sns_event, config)
             pq_dfs.append(pq_df)
-        delete_sqs_message(sqs_event)
+        delete_sqs_message(sqs_event, config)
 
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
-@profile
-def cover_polygon_h3(polygon, resolution: int):
+def cover_polygon_h3(polygon: Polygon|MultiPolygon, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
     """
-    import h3
 
     result_set = set()
     # Hexes for vertices
@@ -87,10 +66,10 @@ def cover_polygon_h3(polygon, resolution: int):
     return result_set
 
 
-@profile
-def cover_shape_h3(shape, resolution: int):
+def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
     """
-    Return the set of H3 cells at the specified resolution which completely cover the input shape.
+    Return the set of H3 cells at the specified resolution which completely
+    cover the input shape.
     """
     result_set = set()
 
@@ -106,34 +85,38 @@ def cover_shape_h3(shape, resolution: int):
             raise ValueError(f"{shape.geom_type}, Unsupported geometry_type")
 
     except Exception as e:
-        raise ValueError(f"Error finding indices for geometry.", repr(e))
+        raise ValueError("Error finding indices for geometry.", repr(e))
 
     return list(result_set)
 
 
-@profile
-def get_db_comp(polygon):
+def get_db_comp(polygon: Polygon|MultiPolygon, config: CloudConfig):
+    """Query Dynamo for entries that overlap with a geometry."""
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
-    for h3_id in part_keys:
-        res = DYNAMO.query(
-            TableName=TABLE_NAME,
-            KeyConditionExpression="h3_id = :h3_val",
-            ExpressionAttributeValues={":h3_val": {"S": h3_id}},
-        )
-        for i in res["Items"]:
-            aname = i["pk_and_model"]["S"]
-            if aname not in aoi_info.keys():
-                aoi_info[aname] = i["polygon"]["S"]
+    # for h3_id in part_keys:
+    #     res = config.dynamo.query(
+    #         TableName=config.table_name,
+    #         KeyConditionExpression="h3_id = :h3_val",
+    #         ExpressionAttributeValues={":h3_val": {"S": h3_id}},
+    #     )
+    res = config.dynamo.execute_statement(
+        Statement='SELECT * FROM tns_geodata_table'
+            f' WHERE h3_id in {part_keys}'
+    )
+    for i in res["Items"]:
+        aname = i["pk_and_model"]["S"]
+        if aname not in aoi_info.keys():
+            aoi_info[aname] = i["polygon"]["S"]
 
     return aoi_info
 
 
-@profile
-def get_entries_by_aoi(aoi):
-    a = DYNAMO.scan(
-        TableName=TABLE_NAME,
+def get_entries_by_aoi(aoi: str, config: CloudConfig):
+    """Scan Dynamo for entries with a specific AOI key."""
+    a = config.dynamo.scan(
+        TableName=config.table_name,
         IndexName="pk_and_model",
         FilterExpression="pk_and_model = :pk_and_model",
         ExpressionAttributeValues={
@@ -143,24 +126,23 @@ def get_entries_by_aoi(aoi):
     return a
 
 
-@profile
-def delete_if_found(aoi):
-    scanned = get_entries_by_aoi(DYNAMO, TABLE_NAME, aoi)
+def delete_if_found(aoi: str, config: CloudConfig):
+    """Delete entries from dynamo."""
+    scanned = get_entries_by_aoi(aoi)
     if scanned["Count"] == 0:
         return
     for i in scanned["Items"]:
-        DYNAMO.delete_item(TableName=TABLE_NAME, Key=i)
+        config.dynamo.delete_item(TableName=config.table_name, Key=i)
     return
 
 
-@profile
-def apply_delete(df):
+def apply_delete(df: pd.DataFrame, config: CloudConfig):
     try:
         aoi = df.pk_and_model
         delete_if_found(aoi)
 
-        publish_res = SNS.publish(
-            TopicArn=SNS_OUT_ARN,
+        publish_res = config.sns.publish(
+            TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {
@@ -173,28 +155,26 @@ def apply_delete(df):
 
         print(f"Successful response: {publish_res}")
     except Exception as e:
-        publish_res = SNS.publish(
-            TopicArn=SNS_OUT_ARN,
+        publish_res = config.sns.publish(
+            TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            Message="Failed to deleted aoi {aoi}",
+            Message="Failed to delete aoi {aoi}",
         )
         print(f"Error response: {publish_res}")
 
 
-@profile
 def db_delete_handler(event, context):
-    set_globals()
+    config = CloudConfig()
     print("event", event)
-    pq_df = get_pq_df(event)
-    pq_df.apply(apply_delete, axis=1)
+    pq_df = get_pq_df(event, config)
+    pq_df.apply(apply_delete, config=config, axis=1)
 
 
-@profile
-def apply_add(df):
+def apply_add(df: pd.DataFrame, config: CloudConfig):
     try:
         polygon_str = df.geometry
         aoi = df.pk_and_model
@@ -208,7 +188,7 @@ def apply_add(df):
         keys = zip(part_keys, aoi_list)
 
         request = {
-            f"{TABLE_NAME}": [
+            f"{config.table_name}": [
                 {
                     "PutRequest": {
                         "Item": {
@@ -221,10 +201,10 @@ def apply_add(df):
                 for pk, aoi in keys
             ]
         }
-        DYNAMO.batch_write_item(RequestItems=request)
+        config.dynamo.batch_write_item(RequestItems=request)
 
-        publish_res = SNS.publish(
-            TopicArn=SNS_OUT_ARN,
+        publish_res = config.sns.publish(
+            TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "h3_indices": {
@@ -237,8 +217,8 @@ def apply_add(df):
         )
         print(f"Added AOI response: {publish_res}")
     except Exception as e:
-        publish_res = SNS.publish(
-            TopicArn=SNS_OUT_ARN,
+        publish_res = config.sns.publish(
+            TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {"DataType": "String", "StringValue": "failed"},
@@ -249,66 +229,104 @@ def apply_add(df):
         print(f"Error response: {publish_res}")
 
 
-@profile
 def db_add_handler(event, context):
-    set_globals()
+    config = CloudConfig()
     print("event", event)
-    pq_df = get_pq_df(event)
+    pq_df = get_pq_df(event, config)
 
-    pq_df.apply(apply_add, axis=1)
+    pq_df.apply(apply_add, config=config, axis=1)
 
-@profile
-def apply_compare(df):
+def apply_polygon(df: pd.DataFrame):
+    polygon_str = df.geometry
+    polygon = from_geojson(polygon_str)
+    return cover_shape_h3(polygon, 3)
+
+def apply_compare(df: pd.DataFrame, config: CloudConfig):
     name = uuid4()
     try:
-        print('running apply_compare')
         polygon_str = df.geometry
         polygon = from_geojson(polygon_str)
-        aoi_info = get_db_comp(polygon)
+        aoi_info = get_db_comp(polygon, config)
         aoi_impact_list = []
         upoly = Polygon(polygon)
         for k, v in aoi_info.items():
             dbpoly = from_geojson(v)
             if not upoly.disjoint(dbpoly):
                 aoi_impact_list.append(k)
-
+        if not aoi_impact_list:
+            return pd.NA
         sns_request_json = {
-            'Id': f'compare-{name}',
-            "Message" :json.dumps(aoi_impact_list),
-            'MessageStructure': 'string',
-            "MessageAttributes": {
-                "tile_id": { "DataType": "String", "StringValue": df.pk_and_model, },
-                "aois": { "DataType": "String.Array", "StringValue": json.dumps(aoi_impact_list), },
+            "Id": f"{df.pk_and_model}-{name}",
+            "MessageAttributes":{
+                "tile_id": {
+                    "DataType": "String",
+                    "StringValue": df.pk_and_model,
+                },
+                "aois": {
+                    "DataType": "String.Array",
+                    "StringValue": json.dumps(aoi_impact_list),
+                },
                 "status": {"DataType": "String", "StringValue": "succeeded"},
             },
-            'MessageDeduplicationId': f'{name}',
+            "Message": f"{df.pk_and_model}-{name}",
             'MessageGroupId': 'compare'
         }
-
-        return sns_request_json
     except Exception as e:
-        print("encountered exception during apply_compare")
-        return {
-            'Id': f'compare-{name}',
-            'Message': f"Error:{e.args}",
-            'MessageStructure': 'string',
-            'MessageAttributes': {
+        sns_request_json = {
+            "Id": f"{df.pk_and_model}-{name}",
+            "MessageAttributes":{
+                "tile_id": {
+                    "DataType": "String",
+                    "StringValue": df.pk_and_model,
+                },
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            'MessageDeduplicationId': f'{name}',
+            "Message": f"{df.pk_and_model}-{name}",
             'MessageGroupId': 'compare'
-        }
 
-@profile
+        }
+    return sns_request_json
+
+def set_dynamo_config():
+    return Config(
+        retries={"max_attempts": 8, "mode": "adaptive"},
+        tcp_keepalive=True,
+        read_timeout=30,
+        connect_timeout=10
+    )
+
+def chunk(iterable, size):
+    it = iter(iterable)
+    while True:
+        batch = list(islice(it, size))
+        if not batch:
+            return
+        yield batch
+
 def db_comp_handler(event, context):
-    set_globals()
-    pq_df = get_pq_df(event)
-    a = pq_df.apply(apply_compare, axis=1)
-    for low in range(0, a.size, 10):
-        vals = a[low:low+10].tolist()
-        SNS.publish_batch(
-            TopicArn=SNS_OUT_ARN,
-            PublishBatchRequestEntries=vals
+    dynamo_cfg = set_dynamo_config()
+    config = CloudConfig(dynamo_cfg)
+    pq_df = get_pq_df(event, config)
+    # query_items =
+    keys_list = pq_df.apply(apply_polygon, axis=1)
+    exprs = [
+        {'Statement':f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'}
+        for keys in keys_list
+    ]
+    config.dynamo.batch_execute_statement(Statements=exprs)
+
+    pq_df_results = pq_df.apply(apply_compare, config=config, axis=1)
+    pq_df_results = pq_df_results.dropna()
+
+    sns_messages = pq_df_results.tolist()
+
+    for batch in chunk(sns_messages, 10):
+        resp = config.sns.publish_batch(
+            TopicArn=config.sns_out_arn,
+            PublishBatchRequestEntries=batch
         )
-    return a
+        if resp.get("Failed"):
+            pass
+    # return number of tiles which were associated with at least 1 subscription
+    return len(pq_df_results.index)

@@ -324,10 +324,10 @@ def db_comp_handler(event, context):
 
     sns_messages = pq_df_results.tolist()
 
-    for batch in chunk(sns_messages, 10):
+    for chunk in batched(sns_messages, 10):
         resp = config.sns.publish_batch(
             TopicArn=config.sns_out_arn,
-            PublishBatchRequestEntries=batch
+            PublishBatchRequestEntries=chunk
         )
         if resp.get("Failed"):
             pass

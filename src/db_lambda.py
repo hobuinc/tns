@@ -5,7 +5,7 @@ import h3
 from botocore.config import Config
 from config import CloudConfig
 from uuid import uuid4
-from itertools import islice
+from itertools import islice, batched
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
@@ -187,9 +187,13 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
-        request = {
-            f"{config.table_name}": [
-                {
+        # max length of items in a dynamo batch write call
+        for chunk in batched(keys, 25):
+            request = {
+                f"{config.table_name}": []
+            }
+            for pk, aoi in chunk:
+                request_item = {
                     "PutRequest": {
                         "Item": {
                             "h3_id": {"S": pk},
@@ -198,10 +202,8 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
                         }
                     }
                 }
-                for pk, aoi in keys
-            ]
-        }
-        config.dynamo.batch_write_item(RequestItems=request)
+                request[f"{config.table_name}"].append(request_item)
+            config.dynamo.batch_write_item(RequestItems=request)
 
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
@@ -310,11 +312,12 @@ def db_comp_handler(event, context):
     pq_df = get_pq_df(event, config)
     # query_items =
     keys_list = pq_df.apply(apply_polygon, axis=1)
-    exprs = [
-        {'Statement':f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'}
-        for keys in keys_list
-    ]
-    config.dynamo.batch_execute_statement(Statements=exprs)
+    
+    for chunk in batched(keys_list, 25):
+        exprs = []
+        for keys in chunk:
+            exprs.append({'Statement':f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'})
+        config.dynamo.batch_execute_statement(Statements=exprs)
 
     pq_df_results = pq_df.apply(apply_compare, config=config, axis=1)
     pq_df_results = pq_df_results.dropna()

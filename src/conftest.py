@@ -146,6 +146,10 @@ def region(tf_output):
 def h3_indices():
     yield ["832a06fffffffff", "832a31fffffffff", "832a04fffffffff"]
 
+@pytest.fixture(scope="function")
+def big_geom_h3_indices():
+    yield ['835b6cfffffffff', '835b52fffffffff', '835b42fffffffff', '835a21fffffffff', '835b4efffffffff', '835b5cfffffffff', '835a00fffffffff', '835a23fffffffff', '835a28fffffffff', '835b71fffffffff', '835a44fffffffff', '835b64fffffffff', '835b73fffffffff', '835b6dfffffffff', '835b55fffffffff', '837ed9fffffffff', '835b61fffffffff', '835a64fffffffff', '835a0cfffffffff', '835b62fffffffff', '835b54fffffffff', '835b0dfffffffff', '835a2dfffffffff', '835b5afffffffff', '835a60fffffffff', '835b70fffffffff', '835a66fffffffff', '835a70fffffffff', '835a54fffffffff', '837661fffffffff', '835a74fffffffff', '835b66fffffffff', '837edbfffffffff', '835a40fffffffff', '835b58fffffffff', '835b6afffffffff', '835b68fffffffff', '835a76fffffffff', '835b50fffffffff', '835b53fffffffff', '835a71fffffffff', '835a08fffffffff', '837749fffffffff', '835a29fffffffff', '835b45fffffffff', '835b43fffffffff', '835b5dfffffffff', '837665fffffffff', '83766dfffffffff', '835b76fffffffff', '837ed8fffffffff', '835b63fffffffff', '835b4afffffffff', '835a46fffffffff', '835a25fffffffff', '835a2afffffffff', '835b46fffffffff', '835b4dfffffffff', '835b41fffffffff', '835b09fffffffff', '835b60fffffffff', '835a55fffffffff', '835a2cfffffffff', '835a63fffffffff', '835a2bfffffffff', '835b65fffffffff', '837edafffffffff', '835a03fffffffff', '835b75fffffffff', '835b5efffffffff', '835b74fffffffff', '835b4cfffffffff', '835b51fffffffff', '835a42fffffffff', '835b69fffffffff', '835a05fffffffff', '835b6bfffffffff', '835b6efffffffff', '835b48fffffffff', '835b5bfffffffff', '835b29fffffffff', '835a09fffffffff', '835a65fffffffff', '835a0dfffffffff', '835b4bfffffffff', '835b72fffffffff', '835b59fffffffff', '835a73fffffffff', '835b56fffffffff', '835a75fffffffff', '83766cfffffffff', '835a72fffffffff', '835a2efffffffff', '835a62fffffffff', '835a0efffffffff', '835b44fffffffff', '837edefffffffff', '835b49fffffffff', '835b40fffffffff', '835a01fffffffff']
+
 
 @pytest.fixture(scope="function")
 def updated_h3_indices():
@@ -181,6 +185,15 @@ def add_message(tf_output, region, geom, pk_and_model):
 @pytest.fixture(scope="function")
 def add_event(add_message, tf_output):
     yield get_event(add_message, "add", tf_output)
+
+@pytest.fixture(scope="function")
+def add_big_geom_message(tf_output, region, big_geom, pk_and_model):
+    put_parquet("add", tf_output, big_geom, pk_and_model)
+    yield get_message("add", tf_output)
+
+@pytest.fixture(scope="function")
+def add_big_geom_event(add_big_geom_message, tf_output):
+    yield get_event(add_big_geom_message, "add", tf_output)
 
 
 @pytest.fixture(scope="function")
@@ -280,6 +293,23 @@ def update_geom():
                     [-123.074979482909725, 44.049714592181111],
                 ]
             ],
+        }
+    )
+
+@pytest.fixture(scope="function")
+def big_geom():
+    yield json.dumps(
+        {
+            "type": "Polygon",
+            "coordinates": [ 
+                [ 
+                    [165.260025025527, 4.57486104965216], 
+                    [172.162002562364, 4.57486104965216], 
+                    [172.162002562364, 14.6551666259766], 
+                    [165.260025025527, 14.6551666259766], 
+                    [165.260025025527, 4.57486104965216] 
+                ] 
+            ] 
         }
     )
 

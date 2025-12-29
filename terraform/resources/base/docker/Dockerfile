@@ -68,5 +68,6 @@ WORKDIR /var/task
 COPY python-entry.sh ./
 RUN chmod +x /var/task/python-entry.sh
 COPY handlers/ /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda
+COPY handlers/config.py /var/task/
 COPY root-bashrc /root/.bashrc
 ENTRYPOINT [ "/var/task/python-entry.sh" ]

@@ -48,21 +48,6 @@ def test_add(tf_output, add_event, pk_and_model, h3_indices):
     clear_sqs(tf_output['db_add_sqs_out'], tf_output['aws_region'])
     clear_sqs(tf_output['db_add_sqs_in'], tf_output['aws_region'])
 
-def test_add_big_geom(tf_output, add_big_geom_event, pk_and_model, big_geom_h3_indices):
-    os.environ['AWS_REGION'] = tf_output['aws_region']
-    os.environ['SNS_OUT_ARN'] = tf_output['db_add_sns_out']
-    os.environ['DB_TABLE_NAME'] = tf_output['table_name']
-
-    db_add_handler(add_big_geom_event, None)
-
-    added_items = get_entries_by_aoi_test_handler(pk_and_model)
-    assert added_items['Count'] == 100
-    for i in added_items['Items']:
-        assert i['pk_and_model']['S'] == pk_and_model
-        assert i['h3_id']['S'] in big_geom_h3_indices
-    clear_sqs(tf_output['db_add_sqs_out'], tf_output['aws_region'])
-    clear_sqs(tf_output['db_add_sqs_in'], tf_output['aws_region'])
-
 def test_update(tf_output, db_fill, update_event, pk_and_model, updated_h3_indices, h3_indices):
     os.environ['AWS_REGION'] = tf_output['aws_region']
     os.environ['SNS_OUT_ARN'] = tf_output['db_add_sns_out']
@@ -84,13 +69,28 @@ def test_update(tf_output, db_fill, update_event, pk_and_model, updated_h3_indic
     clear_sqs(tf_output['db_add_sqs_out'], tf_output['aws_region'])
     clear_sqs(tf_output['db_add_sqs_in'], tf_output['aws_region'])
 
+def test_add_big_geom(tf_output, add_big_geom_event, pk_and_model, big_geom_h3_indices):
+    os.environ['AWS_REGION'] = tf_output['aws_region']
+    os.environ['SNS_OUT_ARN'] = tf_output['db_add_sns_out']
+    os.environ['DB_TABLE_NAME'] = tf_output['table_name']
+
+    db_add_handler(add_big_geom_event, None)
+
+    added_items = get_entries_by_aoi_test_handler(pk_and_model)
+    assert added_items['Count'] == 101
+    for i in added_items['Items']:
+        assert i['pk_and_model']['S'] == pk_and_model
+        assert i['h3_id']['S'] in big_geom_h3_indices
+    clear_sqs(tf_output['db_add_sqs_out'], tf_output['aws_region'])
+    clear_sqs(tf_output['db_add_sqs_in'], tf_output['aws_region'])
+
 def test_delete(tf_output, db_fill, delete_event, pk_and_model, h3_indices, big_geom_h3_indices):
     os.environ['AWS_REGION'] = tf_output['aws_region']
     os.environ['SNS_OUT_ARN'] = tf_output['db_delete_sns_out']
     os.environ['DB_TABLE_NAME'] = tf_output['table_name']
 
-    og_items = get_entries_by_aoi_test_handler(pk_and_model, )
-    assert og_items['Count'] == 103
+    og_items = get_entries_by_aoi_test_handler(pk_and_model)
+    assert og_items['Count'] == 104
     all_h3_indices = h3_indices + big_geom_h3_indices
     for i in og_items['Items']:
         assert i['pk_and_model']['S'] == pk_and_model

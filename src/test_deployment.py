@@ -3,9 +3,7 @@ import boto3
 import pandas as pd
 from time import sleep
 
-from db_lambda import get_entries_by_aoi
-from config import CloudConfig
-config = CloudConfig()
+from db_lambda import get_entries_by_aoi_test_handler
 
 def clear_sqs(sqs_arn, region):
     sqs = boto3.client('sqs', region_name=region)
@@ -184,7 +182,7 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     clear_sqs(sqs_out, region)
     cleanup.append(pk_and_model)
 
-    og_items = get_entries_by_aoi(config, pk_and_model)
+    og_items = get_entries_by_aoi_test_handler(pk_and_model)
     og_h3 = [a['h3_id']['S'] for a in og_items['Items']]
     assert len(og_h3) == 3
     for oh in og_h3:
@@ -222,7 +220,7 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
 
     clear_sqs(sqs_out, region)
 
-    og_items = get_entries_by_aoi(config, pk_and_model)
+    og_items = get_entries_by_aoi_test_handler(pk_and_model)
     assert og_items['Count'] == 3
     for i in og_items['Items']:
         assert i['pk_and_model']['S'] == f'{pk_and_model}'
@@ -236,7 +234,7 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
         message_str = body['Message']
         assert message_str == f'AOI: {pk_and_model} deleted'
 
-    deleted_items = get_entries_by_aoi(config, pk_and_model)
+    deleted_items = get_entries_by_aoi_test_handler(pk_and_model)
     assert deleted_items['Count'] == 0
     assert len(deleted_items['Items']) == 0
 

@@ -55,7 +55,7 @@ def cover_polygon_h3(h3_shape: h3.H3Shape, resolution: int):
     return h3.polygon_to_cells_experimental(h3_shape, resolution, 'overlap')
 
 
-def cover_shape_h3(shape: dict, resolution: int):
+def cover_shape_h3(geojson_dict: dict, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely
     cover the input shape.
@@ -64,19 +64,20 @@ def cover_shape_h3(shape: dict, resolution: int):
 
     try:
         # h3 automatically handles Polygon and Multipolygon
-        print(shape)
-        h3_shape = h3.geo_to_h3shape(shape)
+        h3_shape = h3.geo_to_h3shape(geojson_dict)
         # get h3 indices
         result_set = set(cover_polygon_h3(h3_shape, resolution))
+        print('printing result_set')
+        print(result_set)
     except Exception as e:
         raise ValueError("Error finding indices for geometry.", repr(e))
 
     return list(result_set)
 
 
-def get_db_comp(polygon_dict: dict, config: CloudConfig):
+def get_db_comp(geojson_dict: dict, config: CloudConfig):
     """Query Dynamo for entries that overlap with a geometry."""
-    part_keys = cover_shape_h3(polygon_dict, 3)
+    part_keys = cover_shape_h3(geojson_dict, 3)
     aoi_info = {}
     res = config.dynamo.execute_statement(
         Statement='SELECT * FROM tns_geodata_table'
@@ -106,7 +107,7 @@ def get_entries_by_aoi(aoi: str, config: CloudConfig):
     return a
 
 
-def delete_if_found(aoi: str, config: CloudConfig):
+def delete_if_found(aoi: str, config: CloudConfig | None = None):
     """Delete entries from dynamo."""
     if not config:
         config = CloudConfig()
@@ -159,11 +160,11 @@ def db_delete_handler(event, context):
 def apply_add(df: pd.DataFrame, config: CloudConfig):
     try:
         polygon_str = df.geometry
-        polygon_dict = json.loads(polygon_str)
+        geojson_dict = json.loads(polygon_str)
         aoi = df.pk_and_model
         delete_if_found(aoi, config)
         # create new db entries for aoi-polygon combo
-        part_keys = cover_shape_h3(polygon_dict, 3)
+        part_keys = cover_shape_h3(geojson_dict, 3)
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
@@ -223,9 +224,9 @@ def apply_compare(df: pd.DataFrame, config: CloudConfig):
     name = uuid4()
     try:
         polygon_str = df.geometry
-        polygon_dict = json.loads(polygon_str)
-        aoi_info = get_db_comp(polygon_dict, config)
+        geojson_dict = json.loads(polygon_str)
         polygon = from_geojson(polygon_str)
+        aoi_info = get_db_comp(geojson_dict, config)
         aoi_impact_list = []
         upoly = Polygon(polygon)
         for k, v in aoi_info.items():

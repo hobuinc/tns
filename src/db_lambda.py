@@ -108,6 +108,8 @@ def get_entries_by_aoi(aoi: str, config: CloudConfig):
 
 def delete_if_found(aoi: str, config: CloudConfig):
     """Delete entries from dynamo."""
+    if not config:
+        config = CloudConfig()
     scanned = get_entries_by_aoi(aoi, config)
     if scanned["Count"] == 0:
         return

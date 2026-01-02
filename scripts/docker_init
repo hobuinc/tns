@@ -3,10 +3,10 @@
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 cd $SCRIPT_DIR
 DOCKER_DIR="../terraform/resources/base/docker"
-ARCH=arm64
+ARCH=x86_64
 REPO=tns_ecr
 PYTHON_VERSION=3.13
-LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-arm64"
+LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
 
 set -e
 CONTAINER_NAME="$1"

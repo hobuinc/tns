@@ -48,26 +48,14 @@ def get_pq_df(event, config: CloudConfig):
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
-def cover_polygon_h3(polygon: Polygon|MultiPolygon, resolution: int):
+def cover_polygon_h3(h3_shape: h3.H3Shape, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
     """
-
-    result_set = set()
-    # Hexes for vertices
-    vertex_hexes = [
-        h3.latlng_to_cell(t[1], t[0], resolution) for t in list(polygon.exterior.coords)
-    ]
-    # Hexes for edges (inclusive of vertices)
-    for i in range(len(vertex_hexes) - 1):
-        result_set.update(h3.grid_path_cells(vertex_hexes[i], vertex_hexes[i + 1]))
-    # Hexes for internal area
-    h3_shape = h3.geo_to_h3shape(polygon)
-    result_set.update(list(h3.polygon_to_cells(h3_shape, resolution)))
-    return result_set
+    return h3.polygon_to_cells_experimental(h3_shape, resolution, 'overlap')
 
 
-def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
+def cover_shape_h3(shape: dict, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely
     cover the input shape.
@@ -75,25 +63,20 @@ def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
     result_set = set()
 
     try:
-        if isinstance(shape, Polygon):
-            result_set = result_set.union(cover_polygon_h3(shape, resolution))  # noqa
-
-        elif isinstance(shape, MultiPolygon):
-            result_set = result_set.union(
-                *[cover_shape_h3(s, resolution) for s in shape.geoms]
-            )
-        else:
-            raise ValueError(f"{shape.geom_type}, Unsupported geometry_type")
-
+        # h3 automatically handles Polygon and Multipolygon
+        print(shape)
+        h3_shape = h3.geo_to_h3shape(shape)
+        # get h3 indices
+        result_set = set(cover_polygon_h3(h3_shape, resolution))
     except Exception as e:
         raise ValueError("Error finding indices for geometry.", repr(e))
 
     return list(result_set)
 
 
-def get_db_comp(polygon: Polygon|MultiPolygon, config: CloudConfig):
+def get_db_comp(polygon_dict: dict, config: CloudConfig):
     """Query Dynamo for entries that overlap with a geometry."""
-    part_keys = cover_shape_h3(polygon, 3)
+    part_keys = cover_shape_h3(polygon_dict, 3)
     aoi_info = {}
     res = config.dynamo.execute_statement(
         Statement='SELECT * FROM tns_geodata_table'
@@ -174,13 +157,11 @@ def db_delete_handler(event, context):
 def apply_add(df: pd.DataFrame, config: CloudConfig):
     try:
         polygon_str = df.geometry
+        polygon_dict = json.loads(polygon_str)
         aoi = df.pk_and_model
-        print("polygon_str", polygon_str)
-        polygon = from_geojson(polygon_str)
-        print("polygon")
         delete_if_found(aoi, config)
         # create new db entries for aoi-polygon combo
-        part_keys = cover_shape_h3(polygon, 3)
+        part_keys = cover_shape_h3(polygon_dict, 3)
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
@@ -216,6 +197,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
         )
         print(f"Added AOI response: {publish_res}")
     except Exception as e:
+        traceback.print_exc()
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
             MessageAttributes={
@@ -235,17 +217,13 @@ def db_add_handler(event, context):
 
     pq_df.apply(apply_add, config=config, axis=1)
 
-def apply_polygon(df: pd.DataFrame):
-    polygon_str = df.geometry
-    polygon = from_geojson(polygon_str)
-    return cover_shape_h3(polygon, 3)
-
 def apply_compare(df: pd.DataFrame, config: CloudConfig):
     name = uuid4()
     try:
         polygon_str = df.geometry
+        polygon_dict = json.loads(polygon_str)
+        aoi_info = get_db_comp(polygon_dict, config)
         polygon = from_geojson(polygon_str)
-        aoi_info = get_db_comp(polygon, config)
         aoi_impact_list = []
         upoly = Polygon(polygon)
         for k, v in aoi_info.items():

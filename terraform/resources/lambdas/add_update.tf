@@ -16,6 +16,7 @@ resource aws_lambda_function db_add_lambda_function {
             SNS_OUT_ARN: var.db_add_sns_out_arn
         }
     }
+
     lifecycle {
         replace_triggered_by = [ null_resource.always_run ]
     }

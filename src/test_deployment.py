@@ -1,7 +1,9 @@
 import json
 import boto3
 import pandas as pd
+from itertools import batched
 from time import sleep
+from math import ceil
 
 from db_lambda import get_entries_by_aoi
 
@@ -22,17 +24,23 @@ def clear_sqs(sqs_arn, region):
             break
     return messages
 
-def put_parquet(action, tf_output, polygon, pk_and_model):
+
+def put_parquet(action, tf_output, parquet):
     aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
 
     s3 = boto3.client("s3", region_name=aws_region)
 
+    return s3.put_object(Body=parquet, Bucket=bucket_name, Key=key)
+
+
+def put_polygon(action, tf_output, polygon, pk_and_model):
     df = pd.DataFrame(data={"pk_and_model": [pk_and_model], "geometry": [polygon]})
     df_bytes = df.to_parquet()
 
-    return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
+    return put_parquet(action, tf_output, df_bytes)
+
 
 def delete_sqs_message(e, sqs_arn, region):
     sqs = boto3.client('sqs', region_name=region)
@@ -72,27 +80,47 @@ def sqs_listen(sqs_arn, region, retries = 5):
             messages = res['Messages']
             retry_count = 0
         else:
-            retry_count += 1
-            if retry_count >= retries:
-                raise Exception('Retry count hit.')
+            # set retry to 0 if infinite retries
+            if retry_count:
+                retry_count += 1
+                if retry_count >= retries:
+                    raise Exception('Retry count hit.')
     return messages
 
-def test_big(tf_output, pk_and_model, geom, h3_indices, cleanup):
-    region = tf_output['aws_region']
-    sqs_in = tf_output['db_add_sqs_in']
-    sqs_out = tf_output['db_add_sqs_out']
 
-    clear_sqs(sqs_out, region)
-    count = 5
+### get working
+# - push parquet files of 1000 tiles to s3
+#   - figure out how to format the parquet file
+# - wait for return
+# - inspect
+
+def test_big(tf_output, pk_and_model, geom, h3_indices, cleanup, states_geoms):
+    region = tf_output['aws_region']
+
+    add_sqs_in = tf_output['db_add_sqs_in']
+    add_sqs_out = tf_output['db_add_sqs_out']
+
+    comp_sqs_out = tf_output['db_compare_sqs_out']
+    comp_sqs_in = tf_output['db_compare_sqs_in']
+
+    clear_sqs(add_sqs_in, region)
+    clear_sqs(add_sqs_out, region)
+    clear_sqs(comp_sqs_out, region)
+    clear_sqs(comp_sqs_in, region)
+
+    put_parquet('add', tf_output, states_geoms)
+
+    tile_count = 10**3
+    batch_size = 1000
+    count = ceil(tile_count / batch_size)
     for n in range(count):
-        name = f'raster_{n}'
-        put_parquet("add", tf_output, geom, name)
-        # sns_publish(sns_in, region, f'{n}', geom)
-        cleanup.append(name)
+        df = pd.DataFrame(data=[{"geometry": geom} for x in range(batch_size)])
+        df_bytes = df.to_parquet()
+        put_parquet('compare', tf_output, df_bytes)
 
     msg_count = 0
     while msg_count < count:
-        messages = sqs_listen(sqs_out, region)
+        messages = sqs_listen(comp_sqs_out, region, retries=0)
         for msg in messages:
             body = json.loads(msg['Body'])
             message_str = body['Message']
@@ -110,12 +138,12 @@ def test_big(tf_output, pk_and_model, geom, h3_indices, cleanup):
             for h in h3s:
                 assert h in h3_indices
 
-            delete_sqs_message(msg, sqs_out, region)
+            delete_sqs_message(msg, comp_sqs_out, region)
             msg_count += 1
 
     # should be no messages left in the input queue
     sleep(30) # the visibility timeout we have to wait out to be sure
-    messages = sqs_get_messages(sqs_in, region)
+    messages = sqs_get_messages(add_sqs_in, region)
     assert 'Messages' not in messages
 
 def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
@@ -149,7 +177,7 @@ def test_add(tf_output, pk_and_model, geom, h3_indices, cleanup):
 
     clear_sqs(sqs_out, region)
     cleanup.append(pk_and_model)
-    put_parquet("add", tf_output, geom, pk_and_model)
+    put_polygon("add", tf_output, geom, pk_and_model)
 
     messages = sqs_listen(sqs_out, region)
     for msg in messages:
@@ -174,7 +202,7 @@ def test_add(tf_output, pk_and_model, geom, h3_indices, cleanup):
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
 
-def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indices, h3_indices, cleanup):
+def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indices, h3_indices, cleanup, config):
     region = tf_output['aws_region']
     sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']
@@ -182,7 +210,7 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     clear_sqs(sqs_out, region)
     cleanup.append(pk_and_model)
 
-    og_items = get_entries_by_aoi(pk_and_model)
+    og_items = get_entries_by_aoi(pk_and_model, config)
     og_h3 = [a['h3_id']['S'] for a in og_items['Items']]
     assert len(og_h3) == 3
     for oh in og_h3:
@@ -213,14 +241,14 @@ def test_update(tf_output, db_fill, pk_and_model, update_geom, updated_h3_indice
     messages = sqs_get_messages(sqs_in, region)
     assert 'Messages' not in messages
 
-def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
+def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices, config):
     region = tf_output['aws_region']
     sqs_in = tf_output['db_delete_sqs_in']
     sqs_out = tf_output['db_delete_sqs_out']
 
     clear_sqs(sqs_out, region)
 
-    og_items = get_entries_by_aoi(pk_and_model)
+    og_items = get_entries_by_aoi(pk_and_model, config)
     assert og_items['Count'] == 3
     for i in og_items['Items']:
         assert i['pk_and_model']['S'] == f'{pk_and_model}'
@@ -234,7 +262,7 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices):
         message_str = body['Message']
         assert message_str == f'AOI: {pk_and_model} deleted'
 
-    deleted_items = get_entries_by_aoi(pk_and_model)
+    deleted_items = get_entries_by_aoi(pk_and_model, config)
     assert deleted_items['Count'] == 0
     assert len(deleted_items['Items']) == 0
 

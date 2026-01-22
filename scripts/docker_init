@@ -37,14 +37,15 @@ COMMAND="aws ecr get-login-password --region $REGION | docker login --username A
 echo "$COMMAND"
 eval $COMMAND
 
-ECR_REPONAME=$(aws ecr describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+echo "Repository found ${ECR_REPONAME}"
 
 if [[ "$ECR_REPONAME" == "" ]]
 then
     aws ecr create-repository --region $REGION --repository-name $REPO
 fi
 
-ECR_REPONAME=$(aws ecr describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
 echo "Checking if we find ECR_REPONAME: $ECR_REPONAME"
 if [[ "$ECR_REPONAME" == "" ]]
 then

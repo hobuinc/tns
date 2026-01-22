@@ -5,10 +5,11 @@ import json
 import boto3
 from pathlib import Path
 from time import sleep
+from shapely import Polygon, geometry, bounds, box
 
 import pandas as pd
 
-from db_lambda import delete_if_found
+from db_lambda import delete_if_found, CloudConfig
 
 
 def clear_sqs(sqs_arn, region):
@@ -96,6 +97,32 @@ def get_event(message, action, tf_output):
             }
         ]
     }
+
+
+@pytest.fixture(scope='function')
+def states_geoms():
+    states_json = json.load(open('./src/geoms.json'))
+    def feature_to_json_str(f):
+        p = Polygon(f['geometry']['rings'][0])
+        mapping = geometry.mapping(box(*bounds(p)))
+        return json.dumps(mapping)
+
+    states_dict =pd.DataFrame([
+            {
+                'pk_and_model': f'raster_{idx}',
+                'geometry': feature_to_json_str(feature)
+            }
+            for idx, feature in enumerate(states_json['features'])
+        ])
+    yield states_dict.to_parquet()
+
+
+@pytest.fixture(scope="session")
+def config(tf_output):
+    os.environ["AWS_REGION"] = tf_output["aws_region"]
+    os.environ["SNS_OUT_ARN"] = tf_output["db_add_sns_out"]
+    os.environ["DB_TABLE_NAME"] = tf_output["table_name"]
+    yield CloudConfig()
 
 
 @pytest.fixture(scope="session")

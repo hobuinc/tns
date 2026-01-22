@@ -2,13 +2,43 @@ import json
 import pandas as pd
 import io
 import h3
+import os
+import boto3
+
 from botocore.config import Config
-from config import CloudConfig
 from uuid import uuid4
 from itertools import islice, batched
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
+
+class CloudConfig():
+    def __init__(self, dynamo_cfg:dict=None):
+        env_keys = os.environ.keys()
+        if 'SNS_OUT_ARN' in env_keys:
+            self.sns_out_arn = os.environ['SNS_OUT_ARN']
+        else:
+            self.sns_out_arn = None
+
+        if "DB_TABLE_NAME" in env_keys:
+            self.table_name = os.environ["DB_TABLE_NAME"]
+        else:
+            self.table_name = None
+
+        if "AWS_REGION" in env_keys:
+            self.region = os.environ["AWS_REGION"]
+        else:
+            self.region = "us-west-2"
+
+        if dynamo_cfg is not None:
+            self.dynamo = boto3.client("dynamodb", region_name=self.region, config=dynamo_cfg)
+        else:
+            self.dynamo = boto3.client("dynamodb", region_name=self.region)
+
+        self.sns = boto3.client("sns", region_name=self.region)
+        self.s3 = boto3.client("s3", region_name=self.region)
+        self.sqs = boto3.client("sqs", region_name=self.region)
+
 
 def s3_read_parquet(sns_event, config: CloudConfig):
     s3_info = sns_event["s3"]
@@ -82,6 +112,7 @@ def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
                 *[cover_shape_h3(s, resolution) for s in shape.geoms]
             )
         else:
+            print('error on shape: ', shape)
             raise ValueError(f"{shape.geom_type}, Unsupported geometry_type")
 
     except Exception as e:
@@ -95,16 +126,11 @@ def get_db_comp(polygon: Polygon|MultiPolygon, config: CloudConfig):
     part_keys = cover_shape_h3(polygon, 3)
 
     aoi_info = {}
-    # for h3_id in part_keys:
-    #     res = config.dynamo.query(
-    #         TableName=config.table_name,
-    #         KeyConditionExpression="h3_id = :h3_val",
-    #         ExpressionAttributeValues={":h3_val": {"S": h3_id}},
-    #     )
     res = config.dynamo.execute_statement(
         Statement='SELECT * FROM tns_geodata_table'
             f' WHERE h3_id in {part_keys}'
     )
+    print('db_comp_res', res)
     for i in res["Items"]:
         aname = i["pk_and_model"]["S"]
         if aname not in aoi_info.keys():
@@ -128,7 +154,7 @@ def get_entries_by_aoi(aoi: str, config: CloudConfig):
 
 def delete_if_found(aoi: str, config: CloudConfig):
     """Delete entries from dynamo."""
-    scanned = get_entries_by_aoi(aoi)
+    scanned = get_entries_by_aoi(aoi, config)
     if scanned["Count"] == 0:
         return
     for i in scanned["Items"]:
@@ -139,7 +165,7 @@ def delete_if_found(aoi: str, config: CloudConfig):
 def apply_delete(df: pd.DataFrame, config: CloudConfig):
     try:
         aoi = df.pk_and_model
-        delete_if_found(aoi)
+        delete_if_found(aoi, config)
 
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
@@ -180,19 +206,19 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
         aoi = df.pk_and_model
         print("polygon_str", polygon_str)
         polygon = from_geojson(polygon_str)
-        print("polygon")
-        delete_if_found(aoi)
+        delete_if_found(aoi, config)
+
         # create new db entries for aoi-polygon combo
         part_keys = cover_shape_h3(polygon, 3)
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
         # max length of items in a dynamo batch write call
-        for chunk in batched(keys, 25):
+        for batch in batched(keys, 25):
             request = {
                 f"{config.table_name}": []
             }
-            for pk, aoi in chunk:
+            for pk, aoi in batch:
                 request_item = {
                     "PutRequest": {
                         "Item": {
@@ -219,6 +245,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
         )
         print(f"Added AOI response: {publish_res}")
     except Exception as e:
+        print(f"Error: {e}")
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
             MessageAttributes={
@@ -226,7 +253,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            Message=f"Error:{e}",
+            Message="Error.",
         )
         print(f"Error response: {publish_res}")
 
@@ -245,6 +272,7 @@ def apply_polygon(df: pd.DataFrame):
 
 def apply_compare(df: pd.DataFrame, config: CloudConfig):
     name = uuid4()
+    print(df)
     try:
         polygon_str = df.geometry
         polygon = from_geojson(polygon_str)
@@ -275,18 +303,13 @@ def apply_compare(df: pd.DataFrame, config: CloudConfig):
         }
     except Exception as e:
         sns_request_json = {
-            "Id": f"{df.pk_and_model}-{name}",
+            "Id": f"{name}",
             "MessageAttributes":{
-                "tile_id": {
-                    "DataType": "String",
-                    "StringValue": df.pk_and_model,
-                },
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
-            "Message": f"{df.pk_and_model}-{name}",
+            "Message": f"{name}",
             'MessageGroupId': 'compare'
-
         }
     return sns_request_json
 
@@ -310,13 +333,17 @@ def db_comp_handler(event, context):
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
     pq_df = get_pq_df(event, config)
-    # query_items =
     keys_list = pq_df.apply(apply_polygon, axis=1)
-    
-    for chunk in batched(keys_list, 25):
+
+    for batch in batched(keys_list, 25):
         exprs = []
-        for keys in chunk:
-            exprs.append({'Statement':f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'})
+        for keys in batch:
+            exprs.append(
+                {
+                    'Statement':
+                    f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'
+                }
+            )
         config.dynamo.batch_execute_statement(Statements=exprs)
 
     pq_df_results = pq_df.apply(apply_compare, config=config, axis=1)
@@ -330,6 +357,9 @@ def db_comp_handler(event, context):
             PublishBatchRequestEntries=batch
         )
         if resp.get("Failed"):
-            pass
+            raise ValueError(resp)
+        else:
+            print(resp)
+
     # return number of tiles which were associated with at least 1 subscription
     return len(pq_df_results.index)

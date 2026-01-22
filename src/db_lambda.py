@@ -5,6 +5,7 @@ import h3
 import os
 import boto3
 
+import traceback
 from botocore.config import Config
 from uuid import uuid4
 from itertools import islice, batched
@@ -77,26 +78,14 @@ def get_pq_df(event, config: CloudConfig):
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
-def cover_polygon_h3(polygon: Polygon|MultiPolygon, resolution: int):
+def cover_polygon_h3(h3_shape: h3.H3Shape, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely cover the input polygon.
     """
-
-    result_set = set()
-    # Hexes for vertices
-    vertex_hexes = [
-        h3.latlng_to_cell(t[1], t[0], resolution) for t in list(polygon.exterior.coords)
-    ]
-    # Hexes for edges (inclusive of vertices)
-    for i in range(len(vertex_hexes) - 1):
-        result_set.update(h3.grid_path_cells(vertex_hexes[i], vertex_hexes[i + 1]))
-    # Hexes for internal area
-    h3_shape = h3.geo_to_h3shape(polygon)
-    result_set.update(list(h3.polygon_to_cells(h3_shape, resolution)))
-    return result_set
+    return h3.polygon_to_cells_experimental(h3_shape, resolution, 'overlap')
 
 
-def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
+def cover_shape_h3(geojson_dict: dict, resolution: int):
     """
     Return the set of H3 cells at the specified resolution which completely
     cover the input shape.
@@ -104,27 +93,21 @@ def cover_shape_h3(shape: Polygon|MultiPolygon, resolution: int):
     result_set = set()
 
     try:
-        if isinstance(shape, Polygon):
-            result_set = result_set.union(cover_polygon_h3(shape, resolution))  # noqa
-
-        elif isinstance(shape, MultiPolygon):
-            result_set = result_set.union(
-                *[cover_shape_h3(s, resolution) for s in shape.geoms]
-            )
-        else:
-            print('error on shape: ', shape)
-            raise ValueError(f"{shape.geom_type}, Unsupported geometry_type")
-
+        # h3 automatically handles Polygon and Multipolygon
+        h3_shape = h3.geo_to_h3shape(geojson_dict)
+        # get h3 indices
+        result_set = set(cover_polygon_h3(h3_shape, resolution))
+        print('printing result_set')
+        print(result_set)
     except Exception as e:
         raise ValueError("Error finding indices for geometry.", repr(e))
 
     return list(result_set)
 
 
-def get_db_comp(polygon: Polygon|MultiPolygon, config: CloudConfig):
+def get_db_comp(geojson_dict: dict, config: CloudConfig):
     """Query Dynamo for entries that overlap with a geometry."""
-    part_keys = cover_shape_h3(polygon, 3)
-
+    part_keys = cover_shape_h3(geojson_dict, 3)
     aoi_info = {}
     res = config.dynamo.execute_statement(
         Statement='SELECT * FROM tns_geodata_table'
@@ -138,6 +121,9 @@ def get_db_comp(polygon: Polygon|MultiPolygon, config: CloudConfig):
 
     return aoi_info
 
+def get_entries_by_aoi_test_handler(aoi: str):
+    config = CloudConfig()
+    return get_entries_by_aoi(aoi, config)
 
 def get_entries_by_aoi(aoi: str, config: CloudConfig):
     """Scan Dynamo for entries with a specific AOI key."""
@@ -152,8 +138,10 @@ def get_entries_by_aoi(aoi: str, config: CloudConfig):
     return a
 
 
-def delete_if_found(aoi: str, config: CloudConfig):
+def delete_if_found(aoi: str, config: CloudConfig | None = None):
     """Delete entries from dynamo."""
+    if config is None:
+        config = CloudConfig()
     scanned = get_entries_by_aoi(aoi, config)
     if scanned["Count"] == 0:
         return
@@ -203,13 +191,13 @@ def db_delete_handler(event, context):
 def apply_add(df: pd.DataFrame, config: CloudConfig):
     try:
         polygon_str = df.geometry
+        geojson_dict = json.loads(polygon_str)
         aoi = df.pk_and_model
         print("polygon_str", polygon_str)
-        polygon = from_geojson(polygon_str)
         delete_if_found(aoi, config)
 
         # create new db entries for aoi-polygon combo
-        part_keys = cover_shape_h3(polygon, 3)
+        part_keys = cover_shape_h3(geojson_dict, 3)
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
@@ -245,7 +233,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
         )
         print(f"Added AOI response: {publish_res}")
     except Exception as e:
-        print(f"Error: {e}")
+        traceback.print_exc()
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
             MessageAttributes={
@@ -265,18 +253,14 @@ def db_add_handler(event, context):
 
     pq_df.apply(apply_add, config=config, axis=1)
 
-def apply_polygon(df: pd.DataFrame):
-    polygon_str = df.geometry
-    polygon = from_geojson(polygon_str)
-    return cover_shape_h3(polygon, 3)
-
 def apply_compare(df: pd.DataFrame, config: CloudConfig):
     name = uuid4()
     print(df)
     try:
         polygon_str = df.geometry
+        geojson_dict = json.loads(polygon_str)
         polygon = from_geojson(polygon_str)
-        aoi_info = get_db_comp(polygon, config)
+        aoi_info = get_db_comp(geojson_dict, config)
         aoi_impact_list = []
         upoly = Polygon(polygon)
         for k, v in aoi_info.items():
@@ -329,6 +313,11 @@ def chunk(iterable, size):
             return
         yield batch
 
+def apply_polygon(df: pd.DataFrame):
+    polygon_str = df.geometry
+    polygon = from_geojson(polygon_str)
+    return cover_shape_h3(polygon, 3)
+
 def db_comp_handler(event, context):
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
@@ -351,10 +340,10 @@ def db_comp_handler(event, context):
 
     sns_messages = pq_df_results.tolist()
 
-    for batch in chunk(sns_messages, 10):
+    for chunk in batched(sns_messages, 10):
         resp = config.sns.publish_batch(
             TopicArn=config.sns_out_arn,
-            PublishBatchRequestEntries=batch
+            PublishBatchRequestEntries=chunk
         )
         if resp.get("Failed"):
             raise ValueError(resp)

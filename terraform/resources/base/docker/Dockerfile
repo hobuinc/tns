@@ -1,4 +1,4 @@
-ARG LAMBDA_IMAGE="amazon/aws-lambda-provided:al2"
+ARG LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023-x86_64"
 ARG RIE_ARCH="amd64"
 ARG PYTHON_VERSION="3.13"
 
@@ -68,5 +68,6 @@ WORKDIR /var/task
 COPY python-entry.sh ./
 RUN chmod +x /var/task/python-entry.sh
 COPY handlers/ /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda
+COPY handlers/config.py /var/task/
 COPY root-bashrc /root/.bashrc
 ENTRYPOINT [ "/var/task/python-entry.sh" ]

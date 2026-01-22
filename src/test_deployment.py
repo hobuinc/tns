@@ -1,7 +1,6 @@
 import json
 import boto3
 import pandas as pd
-from itertools import batched
 from time import sleep
 from math import ceil
 

@@ -17,15 +17,13 @@ resource aws_dynamodb_table geodata_table {
     global_secondary_index {
         name = "pk_and_model"
         hash_key = "pk_and_model"
-        non_key_attributes = ["geometry"]
-        projection_type = "INCLUDE"
+        projection_type = "ALL"
     }
 
     global_secondary_index {
         name = "h3_idx"
         hash_key = "h3_id"
-        non_key_attributes = ["pk_and_model"]
-        projection_type = "INCLUDE"
+        projection_type = "ALL"
     }
 
 }

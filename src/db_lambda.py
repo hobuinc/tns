@@ -8,7 +8,7 @@ import boto3
 import traceback
 from botocore.config import Config
 from uuid import uuid4
-from itertools import islice, batched
+from itertools import islice, batched, chain
 
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
@@ -146,6 +146,7 @@ def delete_if_found(aoi: str, config: CloudConfig | None = None):
     if scanned["Count"] == 0:
         return
     for i in scanned["Items"]:
+        i.pop('polygon')
         config.dynamo.delete_item(TableName=config.table_name, Key=i)
     return
 
@@ -253,21 +254,19 @@ def db_add_handler(event, context):
 
     pq_df.apply(apply_add, config=config, axis=1)
 
-def apply_compare(df: pd.DataFrame, config: CloudConfig):
+def apply_compare(df: pd.DataFrame, aois: pd.DataFrame, config: CloudConfig):
     name = uuid4()
-    print(df)
+    filtered_aois = aois[aois.h3_id.isin(df.h3_id)]
     try:
-        polygon_str = df.geometry
-        geojson_dict = json.loads(polygon_str)
-        polygon = from_geojson(polygon_str)
-        aoi_info = get_db_comp(geojson_dict, config)
-        aoi_impact_list = []
-        upoly = Polygon(polygon)
-        for k, v in aoi_info.items():
-            dbpoly = from_geojson(v)
-            if not upoly.disjoint(dbpoly):
-                aoi_impact_list.append(k)
-        if not aoi_impact_list:
+        polygon_str = df.loc[0].geometry
+        tile_polygon = from_geojson(polygon_str)
+        def aoi_comp(item, tp):
+            aoi_polygon = from_geojson(item.polygon)
+            if not aoi_polygon.disjoint(tp):
+                return item
+
+        aoi_impact_list = filtered_aois.apply(aoi_comp, tp=tile_polygon, axis=1)
+        if not aoi_impact_list.any():
             return pd.NA
         sns_request_json = {
             "Id": f"{df.pk_and_model}-{name}",
@@ -316,29 +315,75 @@ def chunk(iterable, size):
 def apply_polygon(df: pd.DataFrame):
     polygon_str = df.geometry
     polygon = from_geojson(polygon_str)
-    return cover_shape_h3(polygon, 3)
+    h3_ids = cover_shape_h3(polygon, 3)
+    # return h3_ids
+    newdf = pd.DataFrame(data = [
+        {
+            'pk_and_model' : df.pk_and_model,
+            'geometry': df.geometry,
+            'h3_id': h3
+        } for h3 in h3_ids
+    ])
 
+    return newdf
+
+# Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
+# AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
+# have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
+# {TileModel}_{TilePK}.
+# TODO may want to change names to clear on aoi/tile pk_and_model attributes,
+# but leaving for now in interest of time.
 def db_comp_handler(event, context):
+    # create configs
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
-    pq_df = get_pq_df(event, config)
-    keys_list = pq_df.apply(apply_polygon, axis=1)
 
-    for batch in batched(keys_list, 25):
-        exprs = []
-        for keys in batch:
-            exprs.append(
+    # grab data fraom s3
+    pq_df = get_pq_df(event, config)
+
+    #attach keys to respective tiles/geometries
+    data = []
+    for idx, row in pq_df.iterrows():
+        polygon_str = row.geometry
+        polygon = from_geojson(polygon_str)
+        h3_ids = cover_shape_h3(polygon, 3)
+        for h3_id in h3_ids:
+            data.append(
                 {
-                    'Statement':
-                    f'SELECT * FROM {config.table_name} WHERE h3_id IN {keys}'
+                    'pk_and_model' : row.pk_and_model,
+                    'geometry': row.geometry,
+                    'h3_id': h3_id
                 }
             )
-        config.dynamo.batch_execute_statement(Statements=exprs)
+    new_df = pd.DataFrame(data=data)
 
-    pq_df_results = pq_df.apply(apply_compare, config=config, axis=1)
-    pq_df_results = pq_df_results.dropna()
+    # deduplicate keys
+    deduped = list(new_df.h3_id.drop_duplicates())
 
-    sns_messages = pq_df_results.tolist()
+    # query h3 index
+    statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
+                 f'WHERE h3_id IN {deduped}')
+    res = config.dynamo.execute_statement(Statement=statement)
+
+    # get items and make into dataframe for easier manipulation
+    aois = res['Items']
+    aois_data = [
+        {
+            'h3_id': i['h3_id']['S'],
+            'polygon': i['polygon']['S'],
+            'pk_and_model': i['pk_and_model']['S']
+        } for i in aois
+    ]
+    aois_df = pd.DataFrame(data=aois_data).set_index('pk_and_model')
+    db_h3_results = [aoi['h3_id']['S'] for aoi in aois]
+
+    # associate matched h3_id with tile id and tile polygon
+    matched_tiles = new_df[new_df.h3_id.isin(db_h3_results)]
+    tiles_grouped = matched_tiles.groupby('pk_and_model')
+    tiles_applied = tiles_grouped.apply(apply_compare, aois=aois_df, config=config)
+
+    tiles_applied = tiles_applied.dropna()
+    sns_messages = tiles_applied.tolist()
 
     for chunk in batched(sns_messages, 10):
         resp = config.sns.publish_batch(
@@ -347,8 +392,6 @@ def db_comp_handler(event, context):
         )
         if resp.get("Failed"):
             raise ValueError(resp)
-        else:
-            print(resp)
 
     # return number of tiles which were associated with at least 1 subscription
-    return len(pq_df_results.index)
+    return len(sns_messages)

@@ -27,7 +27,7 @@ def clear_sqs(sqs_arn, region):
     return messages
 
 
-def test_comp(tf_output, comp_event, pk_and_model, db_fill):
+def test_comp(tf_output, comp_event, db_fill):
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["db_compare_sns_out"]
     os.environ["DB_TABLE_NAME"] = tf_output["table_name"]
@@ -42,11 +42,12 @@ def test_comp(tf_output, comp_event, pk_and_model, db_fill):
 
 def test_add(tf_output, add_event, pk_and_model, h3_indices, config):
     db_add_handler(add_event, None)
+    aoi_name = f'{pk_and_model}_0'
 
-    added_items = get_entries_by_aoi(pk_and_model, config)
+    added_items = get_entries_by_aoi(aoi_name, config)
     assert added_items["Count"] == 3
     for i in added_items["Items"]:
-        assert i["pk_and_model"]["S"] == pk_and_model
+        assert i["pk_and_model"]["S"] == aoi_name
         assert i["h3_id"]["S"] in h3_indices
     clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
     clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
@@ -61,33 +62,35 @@ def test_update(
     h3_indices,
     config,
 ):
-    og_items = get_entries_by_aoi(pk_and_model, config)
+    aoi_name = f'{pk_and_model}_0'
+    og_items = get_entries_by_aoi(aoi_name, config)
     for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == pk_and_model
+        assert i["pk_and_model"]["S"] == aoi_name
         assert i["h3_id"]["S"] in h3_indices
 
     # update
     db_add_handler(update_event, None)
 
-    updated_items = get_entries_by_aoi(pk_and_model, config)
+    updated_items = get_entries_by_aoi(aoi_name, config)
     assert updated_items["Count"] == 2
     for i in updated_items["Items"]:
-        assert i["pk_and_model"]["S"] == pk_and_model
+        assert i["pk_and_model"]["S"] == aoi_name
         assert i["h3_id"]["S"] in updated_h3_indices
     clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
     clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
 
 
 def test_delete(tf_output, db_fill, delete_event, pk_and_model, h3_indices, config):
-    og_items = get_entries_by_aoi( pk_and_model, config)
+    aoi_name = f'{pk_and_model}_0'
+    og_items = get_entries_by_aoi(aoi_name, config)
     assert og_items["Count"] == 3
     for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == pk_and_model
+        assert i["pk_and_model"]["S"] == aoi_name
         assert i["h3_id"]["S"] in h3_indices
 
     db_delete_handler(delete_event, None)
 
-    deleted_items = get_entries_by_aoi(pk_and_model, config)
+    deleted_items = get_entries_by_aoi(aoi_name, config)
     assert deleted_items["Count"] == 0
     assert len(deleted_items["Items"]) == 0
     clear_sqs(tf_output["db_delete_sqs_out"], tf_output["aws_region"])

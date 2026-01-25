@@ -64,7 +64,7 @@ def put_parquet(action, tf_output, polygon, pk_and_model, amt=1):
 
     df = pd.DataFrame(
         data={
-            "pk_and_model": [pk_and_model for n in range(amt)],
+            "pk_and_model": [f'{pk_and_model}_{n}' for n in range(amt)],
             "geometry": [polygon for n in range(amt)],
         }
     )
@@ -260,17 +260,18 @@ def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices):
     db_name = tf_output["table_name"]
     aws_region = tf_output["aws_region"]
     dynamo = boto3.client("dynamodb", region_name=aws_region)
+    aoi_name = f'{pk_and_model}_0'
 
     # make sure that old entries are deleted before using
     for pk in h3_indices:
         key = {
-            "pk_and_model": {"S": pk_and_model},
+            "pk_and_model": {"S": aoi_name},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
     for pk in updated_h3_indices:
         key = {
-            "pk_and_model": {"S": pk_and_model},
+            "pk_and_model": {"S": aoi_name},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
@@ -281,7 +282,7 @@ def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices):
                 "PutRequest": {
                     "Item": {
                         "h3_id": {"S": pk},
-                        "pk_and_model": {"S": pk_and_model},
+                        "pk_and_model": {"S": aoi_name},
                         "polygon": {"S": geom},
                     }
                 }
@@ -293,13 +294,13 @@ def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices):
 
     for pk in h3_indices:
         key = {
-            "pk_and_model": {"S": pk_and_model},
+            "pk_and_model": {"S": aoi_name},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
     for pk in updated_h3_indices:
         key = {
-            "pk_and_model": {"S": pk_and_model},
+            "pk_and_model": {"S": aoi_name},
             "h3_id": {"S": pk},
         }
         dynamo.delete_item(Key=key, TableName=db_name)
@@ -327,15 +328,15 @@ def big_geom():
     yield json.dumps(
         {
             "type": "Polygon",
-            "coordinates": [ 
-                [ 
-                    [165.260025025527, 4.57486104965216], 
-                    [172.162002562364, 4.57486104965216], 
-                    [172.162002562364, 14.6551666259766], 
-                    [165.260025025527, 14.6551666259766], 
-                    [165.260025025527, 4.57486104965216] 
-                ] 
-            ] 
+            "coordinates": [
+                [
+                    [165.260025025527, 4.57486104965216],
+                    [172.162002562364, 4.57486104965216],
+                    [172.162002562364, 14.6551666259766],
+                    [165.260025025527, 14.6551666259766],
+                    [165.260025025527, 4.57486104965216]
+                ]
+            ]
         }
     )
 

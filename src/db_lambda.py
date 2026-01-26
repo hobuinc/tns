@@ -4,6 +4,7 @@ import io
 import h3
 import os
 import boto3
+from osgeo import gdal
 
 import traceback
 from botocore.config import Config

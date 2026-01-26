@@ -8,6 +8,7 @@ from time import sleep
 from shapely import Polygon, geometry, bounds, box
 
 import pandas as pd
+import geopandas as gpd
 
 from db_lambda import delete_if_found, CloudConfig
 
@@ -62,10 +63,10 @@ def put_parquet(action, tf_output, polygon, pk_and_model, amt=1):
 
     s3 = boto3.client("s3", region_name=aws_region)
 
-    df = pd.DataFrame(
+    df = gpd.DataFrame(
         data={
             "pk_and_model": [f"{pk_and_model}_{n}" for n in range(amt)],
-            "geometry": [polygon for n in range(amt)],
+            "wkt_geometry": [polygon for n in range(amt)],
         }
     )
     df_bytes = df.to_parquet()

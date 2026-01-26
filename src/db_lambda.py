@@ -177,6 +177,7 @@ def apply_delete(df: pd.DataFrame, config: CloudConfig):
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
             Message="Failed to delete aoi {aoi}",
+            Message="Failed to delete aoi {aoi}",
         )
         print(f"Error response: {publish_res}")
 

@@ -134,11 +134,13 @@ def dynamo(tf_output):
 
 @pytest.fixture(scope="function")
 def cleanup(tf_output):
+def cleanup(tf_output):
     aois_to_delete = []
 
     yield aois_to_delete
 
     for a in aois_to_delete:
+        delete_if_found(a)
         delete_if_found(a)
 
 

@@ -176,6 +176,7 @@ def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
 
 
 def test_add(tf_output, pk_and_model, geom, h3_indices, cleanup):
+def test_add(tf_output, pk_and_model, geom, h3_indices, cleanup):
     region = tf_output['aws_region']
     sqs_in = tf_output['db_add_sqs_in']
     sqs_out = tf_output['db_add_sqs_out']

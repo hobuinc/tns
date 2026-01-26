@@ -6,7 +6,7 @@ variable ecr_image_uri {
 
 locals {
     ecr_repository_name = "tns_ecr"
-    arch = "x86_64"
+    arch = "linux/amd64"
     python_version = "3.13"
     image_uri = (var.ecr_image_uri == "" ?
         "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}" :

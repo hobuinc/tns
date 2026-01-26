@@ -3,7 +3,8 @@
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 cd $SCRIPT_DIR
 DOCKER_DIR="../terraform/resources/base/docker"
-ARCH=x86_64
+ARCH=amd64
+RIE_ARCH=x86_64
 REPO=tns_ecr
 PYTHON_VERSION=3.13
 LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
@@ -59,7 +60,7 @@ docker buildx build --platform linux/${ARCH} \
     --no-cache \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
     --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
-    --build-arg RIE_ARCH=$ARCH \
+    --build-arg RIE_ARCH=$RIE_ARCH \
     --load \
     -t ${FULL_CONTAINER_NAME} \
     "$DOCKER_DIR/" \

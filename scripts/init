@@ -27,7 +27,7 @@ cd $SCRIPT_DIR/../terraform
 terraform init --upgrade
 terraform providers lock
 terraform providers mirror \
-    -platform=linux_amd64 \
+    -platform=linux_x86_64 \
     -platform=darwin_arm64 \
     -lock-file=False \
     $TF_PLUGIN_CACHE_DIR

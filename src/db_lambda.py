@@ -73,7 +73,7 @@ def get_pq_df(event, config: CloudConfig):
         for sns_event in message["Records"]:
             pq_df = s3_read_parquet(sns_event, config)
             pq_dfs.append(pq_df)
-        delete_sqs_message(sqs_event, config)
+        # delete_sqs_message(sqs_event, config)
 
     return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
@@ -97,8 +97,6 @@ def cover_shape_h3(geojson_dict: dict, resolution: int):
         h3_shape = h3.geo_to_h3shape(geojson_dict)
         # get h3 indices
         result_set = set(cover_polygon_h3(h3_shape, resolution))
-        print('printing result_set')
-        print(result_set)
     except Exception as e:
         raise ValueError("Error finding indices for geometry.", repr(e))
 
@@ -334,64 +332,79 @@ def apply_polygon(df: pd.DataFrame):
 # TODO may want to change names to clear on aoi/tile pk_and_model attributes,
 # but leaving for now in interest of time.
 def db_comp_handler(event, context):
+    import tracemalloc
     # create configs
-    dynamo_cfg = set_dynamo_config()
-    config = CloudConfig(dynamo_cfg)
+    tracemalloc.start()
+    try:
+        dynamo_cfg = set_dynamo_config()
+        config = CloudConfig(dynamo_cfg)
+        print('Event:', event)
 
-    # grab data fraom s3
-    pq_df = get_pq_df(event, config)
+        # grab data fraom s3
+        pq_df = get_pq_df(event, config)
 
-    #attach keys to respective tiles/geometries
-    data = []
-    for idx, row in pq_df.iterrows():
-        polygon_str = row.geometry
-        polygon = from_geojson(polygon_str)
-        h3_ids = cover_shape_h3(polygon, 3)
-        for h3_id in h3_ids:
-            data.append(
-                {
-                    'pk_and_model' : row.pk_and_model,
-                    'geometry': row.geometry,
-                    'h3_id': h3_id
-                }
+        #attach keys to respective tiles/geometries
+        data = []
+        for idx, row in pq_df.iterrows():
+            polygon_str = row.geometry
+            polygon = from_geojson(polygon_str)
+            h3_ids = cover_shape_h3(polygon, 3)
+            for h3_id in h3_ids:
+                data.append(
+                    {
+                        'pk_and_model' : row.pk_and_model,
+                        'geometry': row.geometry,
+                        'h3_id': h3_id
+                    }
+                )
+        new_df = pd.DataFrame(data=data)
+
+        # deduplicate keys
+        deduped = list(new_df.h3_id.drop_duplicates())
+
+        # query h3 index
+        statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
+                    f'WHERE h3_id IN {deduped}')
+        res = config.dynamo.execute_statement(Statement=statement)
+
+        # get items and make into dataframe for easier manipulation
+        aois = res['Items']
+        aois_data = [
+            {
+                'h3_id': i['h3_id']['S'],
+                'polygon': i['polygon']['S'],
+                'pk_and_model': i['pk_and_model']['S']
+            } for i in aois
+        ]
+        aois_df = pd.DataFrame(data=aois_data).set_index('pk_and_model')
+        print('4')
+        db_h3_results = [aoi['h3_id']['S'] for aoi in aois]
+        print('5')
+
+        # associate matched h3_id with tile id and tile polygon
+        print('6')
+        tiles = (new_df[new_df.h3_id.isin(db_h3_results)]
+            .groupby('pk_and_model', group_keys=False)
+            .apply(apply_compare, aois=aois_df, config=config))
+        print('7')
+
+        tiles = tiles.dropna()
+        print('9')
+        sns_messages = tiles.tolist()
+        print('10')
+
+        for chunk in batched(sns_messages, 10):
+            resp = config.sns.publish_batch(
+                TopicArn=config.sns_out_arn,
+                PublishBatchRequestEntries=chunk
             )
-    new_df = pd.DataFrame(data=data)
+            if resp.get("Failed"):
+                raise ValueError(resp)
+            print('10')
 
-    # deduplicate keys
-    deduped = list(new_df.h3_id.drop_duplicates())
-
-    # query h3 index
-    statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                 f'WHERE h3_id IN {deduped}')
-    res = config.dynamo.execute_statement(Statement=statement)
-
-    # get items and make into dataframe for easier manipulation
-    aois = res['Items']
-    aois_data = [
-        {
-            'h3_id': i['h3_id']['S'],
-            'polygon': i['polygon']['S'],
-            'pk_and_model': i['pk_and_model']['S']
-        } for i in aois
-    ]
-    aois_df = pd.DataFrame(data=aois_data).set_index('pk_and_model')
-    db_h3_results = [aoi['h3_id']['S'] for aoi in aois]
-
-    # associate matched h3_id with tile id and tile polygon
-    matched_tiles = new_df[new_df.h3_id.isin(db_h3_results)]
-    tiles_grouped = matched_tiles.groupby('pk_and_model')
-    tiles_applied = tiles_grouped.apply(apply_compare, aois=aois_df, config=config)
-
-    tiles_applied = tiles_applied.dropna()
-    sns_messages = tiles_applied.tolist()
-
-    for chunk in batched(sns_messages, 10):
-        resp = config.sns.publish_batch(
-            TopicArn=config.sns_out_arn,
-            PublishBatchRequestEntries=chunk
-        )
-        if resp.get("Failed"):
-            raise ValueError(resp)
-
-    # return number of tiles which were associated with at least 1 subscription
-    return len(sns_messages)
+        # return number of tiles which were associated with at least 1 subscription
+        return len(sns_messages)
+    except Exception as e:
+        print('Exception found:')
+        print(e.args)
+        raise e

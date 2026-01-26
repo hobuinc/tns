@@ -1,5 +1,5 @@
 ARG LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023-x86_64"
-ARG RIE_ARCH="amd64"
+ARG RIE_ARCH="x86_64"
 ARG PYTHON_VERSION="3.13"
 
 FROM --platform=$TARGETPLATFORM condaforge/miniforge3:latest as condasetup

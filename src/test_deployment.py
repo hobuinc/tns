@@ -113,7 +113,13 @@ def test_big(tf_output, pk_and_model, geom, h3_indices, cleanup, states_geoms):
     batch_size = 1000
     count = ceil(tile_count / batch_size)
     for n in range(count):
-        df = pd.DataFrame(data=[{"geometry": geom} for x in range(batch_size)])
+        data=[
+            {
+                'pk_and_model': f'raster_{x}_{n}',
+                "geometry": geom
+            } for x in range(batch_size)
+        ]
+        df = pd.DataFrame(data=data)
         df_bytes = df.to_parquet()
         put_parquet('compare', tf_output, df_bytes)
 

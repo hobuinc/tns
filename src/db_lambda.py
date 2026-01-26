@@ -1,17 +1,15 @@
 import json
 import pandas as pd
-import io
 import h3
 import os
 import boto3
-from osgeo import gdal
+from osgeo import gdal, ogr
 
 import traceback
 from botocore.config import Config
 from uuid import uuid4
-from itertools import islice, batched, chain
+from itertools import islice, batched
 
-from shapely.geometry import Polygon, MultiPolygon
 from shapely import from_geojson
 
 class CloudConfig():
@@ -46,9 +44,10 @@ def s3_read_parquet(sns_event, config: CloudConfig):
     s3_info = sns_event["s3"]
     bucket = s3_info["bucket"]["name"]
     key = s3_info["object"]["key"]
-    file = config.s3.get_object(Bucket=bucket, Key=key)["Body"]
-    pq_bytes = io.BytesIO(file.read())
-    return pd.read_parquet(pq_bytes)
+    vsis_path = f'/vsis3/{bucket}/{key}'
+    gd = gdal.OpenEx(vsis_path)
+    # layer = gd.GetLayer()
+    return gd
 
 
 def delete_sqs_message(e, config: CloudConfig):
@@ -62,8 +61,8 @@ def delete_sqs_message(e, config: CloudConfig):
     return config.sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
-def get_pq_df(event, config: CloudConfig):
-    pq_dfs = []
+def get_gdal_layers(event, config: CloudConfig):
+    datasets = []
     for sqs_event in event["Records"]:
         body = json.loads(sqs_event["body"])
         message = json.loads(body["Message"])
@@ -72,11 +71,12 @@ def get_pq_df(event, config: CloudConfig):
             delete_sqs_message(sqs_event, config)
             continue
         for sns_event in message["Records"]:
-            pq_df = s3_read_parquet(sns_event, config)
-            pq_dfs.append(pq_df)
-        # delete_sqs_message(sqs_event, config)
+            dataset = s3_read_parquet(sns_event, config)
+            datasets.append(dataset)
+        delete_sqs_message(sqs_event, config)
 
-    return pd.concat(pq_dfs) if pq_dfs else pq_dfs
+    return datasets
+    # return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
 def cover_polygon_h3(h3_shape: h3.H3Shape, resolution: int):
@@ -123,6 +123,7 @@ def get_db_comp(geojson_dict: dict, config: CloudConfig):
 def get_entries_by_aoi_test_handler(aoi: str):
     config = CloudConfig()
     return get_entries_by_aoi(aoi, config)
+
 
 def get_entries_by_aoi(aoi: str, config: CloudConfig):
     """Scan Dynamo for entries with a specific AOI key."""
@@ -177,7 +178,6 @@ def apply_delete(df: pd.DataFrame, config: CloudConfig):
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
             Message="Failed to delete aoi {aoi}",
-            Message="Failed to delete aoi {aoi}",
         )
         print(f"Error response: {publish_res}")
 
@@ -185,7 +185,7 @@ def apply_delete(df: pd.DataFrame, config: CloudConfig):
 def db_delete_handler(event, context):
     config = CloudConfig()
     print("event", event)
-    pq_df = get_pq_df(event, config)
+    pq_df = get_gdal_layers(event, config)
     pq_df.apply(apply_delete, config=config, axis=1)
 
 
@@ -250,7 +250,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
 def db_add_handler(event, context):
     config = CloudConfig()
     print("event", event)
-    pq_df = get_pq_df(event, config)
+    pq_df = get_gdal_layers(event, config)
 
     pq_df.apply(apply_add, config=config, axis=1)
 
@@ -334,79 +334,78 @@ def apply_polygon(df: pd.DataFrame):
 # TODO may want to change names to clear on aoi/tile pk_and_model attributes,
 # but leaving for now in interest of time.
 def db_comp_handler(event, context):
-    import tracemalloc
     # create configs
-    tracemalloc.start()
-    try:
-        dynamo_cfg = set_dynamo_config()
-        config = CloudConfig(dynamo_cfg)
-        print('Event:', event)
+    dynamo_cfg = set_dynamo_config()
+    config = CloudConfig(dynamo_cfg)
+    print('Event:', event)
 
-        # grab data fraom s3
-        pq_df = get_pq_df(event, config)
+    # grab data fraom s3
+    datasets = get_gdal_layers(event, config)
 
-        #attach keys to respective tiles/geometries
-        data = []
-        for idx, row in pq_df.iterrows():
-            polygon_str = row.geometry
+    # iterate gdal dataset layers
+    # create list of h3_ids from
+    # use h3_ids to query dynamo
+    # filter layers by polygons produced from dynamo
+    sns_messages = []
+    for ds in datasets:
+        # create tracking variables
+        aois_affected_map: dict[str, list] = {}
+        h3_ids = []
+        layer = ds.GetLayer()
+
+        # iterate tiles and find h3 cover
+        for feature in layer:
+            polygon_str = feature.geometry().ExportToJson()
             polygon = from_geojson(polygon_str)
-            h3_ids = cover_shape_h3(polygon, 3)
-            for h3_id in h3_ids:
-                data.append(
-                    {
-                        'pk_and_model' : row.pk_and_model,
-                        'geometry': row.geometry,
-                        'h3_id': h3_id
-                    }
-                )
-        new_df = pd.DataFrame(data=data)
-
-        # deduplicate keys
-        deduped = list(new_df.h3_id.drop_duplicates())
+            h3_ids = h3_ids + cover_shape_h3(polygon, 3)
+        deduped = list(set(h3_ids))
 
         # query h3 index
         statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
                     f'WHERE h3_id IN {deduped}')
         res = config.dynamo.execute_statement(Statement=statement)
+        aoi_poly_map = {}
+        for aoi in res['Items']:
+            aoi_poly_map[aoi['pk_and_model']['S']] = aoi['polygon']['S']
 
-        # get items and make into dataframe for easier manipulation
-        aois = res['Items']
-        aois_data = [
-            {
-                'h3_id': i['h3_id']['S'],
-                'polygon': i['polygon']['S'],
-                'pk_and_model': i['pk_and_model']['S']
-            } for i in aois
-        ]
-        aois_df = pd.DataFrame(data=aois_data).set_index('pk_and_model')
-        print('4')
-        db_h3_results = [aoi['h3_id']['S'] for aoi in aois]
-        print('5')
+        # create ogr geometry from polygons
+        for k,v in aoi_poly_map.items():
+            geom = ogr.CreateGeometryFromJson(v)
+            layer.SetSpatialFilter(geom)
+            for feature in layer:
+                tile_pk = feature.pk_and_model
+                if tile_pk in aois_affected_map:
+                    aois_affected_map[tile_pk].append(k)
+                else:
+                    aois_affected_map[tile_pk] = [k]
 
-        # associate matched h3_id with tile id and tile polygon
-        print('6')
-        tiles = (new_df[new_df.h3_id.isin(db_h3_results)]
-            .groupby('pk_and_model', group_keys=False)
-            .apply(apply_compare, aois=aois_df, config=config))
-        print('7')
+        for tile_pk, aoi_list in aois_affected_map.items():
+            name = f'{tile_pk}-{uuid4()}'
+            sns_request_json = {
+                "Id": name,
+                "MessageAttributes":{
+                    "tile_id": {
+                        "DataType": "String",
+                        "StringValue": feature.pk_and_model,
+                    },
+                    "aois": {
+                        "DataType": "String.Array",
+                        "StringValue": json.dumps(aoi_list),
+                    },
+                    "status": {"DataType": "String", "StringValue": "succeeded"},
+                },
+                "Message": name,
+                'MessageGroupId': 'compare'
+            }
+            sns_messages.append(sns_request_json)
 
-        tiles = tiles.dropna()
-        print('9')
-        sns_messages = tiles.tolist()
-        print('10')
+    for chunk in batched(sns_messages, 10):
+        resp = config.sns.publish_batch(
+            TopicArn=config.sns_out_arn,
+            PublishBatchRequestEntries=chunk
+        )
+        if resp.get("Failed"):
+            raise ValueError(resp)
 
-        for chunk in batched(sns_messages, 10):
-            resp = config.sns.publish_batch(
-                TopicArn=config.sns_out_arn,
-                PublishBatchRequestEntries=chunk
-            )
-            if resp.get("Failed"):
-                raise ValueError(resp)
-            print('10')
-
-        # return number of tiles which were associated with at least 1 subscription
-        return len(sns_messages)
-    except Exception as e:
-        print('Exception found:')
-        print(e.args)
-        raise e
+    # return number of tiles which were associated with at least 1 subscription
+    return len(sns_messages)

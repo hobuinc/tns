@@ -5,10 +5,10 @@ import json
 import boto3
 from pathlib import Path
 from time import sleep
-from shapely import Polygon, geometry, bounds, box
+from shapely import Polygon, geometry, bounds, box, from_geojson
 
 import pandas as pd
-import geopandas as gpd
+import polars_st as st
 
 from db_lambda import delete_if_found, CloudConfig
 
@@ -57,20 +57,27 @@ def get_message(action, tf_output, retries=0):
 
 
 def put_parquet(action, tf_output, polygon, pk_and_model, amt=1):
-    aws_region = tf_output["aws_region"]
+    # aws_region = tf_output["aws_region"]
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/geom.parquet"
 
-    s3 = boto3.client("s3", region_name=aws_region)
+    # s3 = boto3.client("s3", region_name=aws_region)
+    vsis_path = f'/vsis3/{bucket_name}/{key}'
+    df_kwargs = {"compression": "zstd",}
 
-    df = gpd.DataFrame(
+    gdf = st.GeoDataFrame(
         data={
             "pk_and_model": [f"{pk_and_model}_{n}" for n in range(amt)],
-            "wkt_geometry": [polygon for n in range(amt)],
-        }
+            "geometry": [from_geojson(polygon).wkb for n in range(amt)],
+        },
+        strict=True,
+        infer_schema_length=True,
+        geometry_format='wkb'
     )
-    df_bytes = df.to_parquet()
-    return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
+    gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+    gdf.st.write_file(path=vsis_path, driver="PARQUET", layer="product", **df_kwargs)
+    # df_bytes = gdf.to_parquet()
+    # return s3.put_object(Body=df_bytes, Bucket=bucket_name, Key=key)
 
 
 def get_event(message, action, tf_output):
@@ -134,13 +141,11 @@ def dynamo(tf_output):
 
 @pytest.fixture(scope="function")
 def cleanup(tf_output):
-def cleanup(tf_output):
     aois_to_delete = []
 
     yield aois_to_delete
 
     for a in aois_to_delete:
-        delete_if_found(a)
         delete_if_found(a)
 
 

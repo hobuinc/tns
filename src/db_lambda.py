@@ -46,7 +46,6 @@ def s3_read_parquet(sns_event, config: CloudConfig):
     key = s3_info["object"]["key"]
     vsis_path = f'/vsis3/{bucket}/{key}'
     gd = gdal.OpenEx(vsis_path)
-    # layer = gd.GetLayer()
     return gd
 
 
@@ -76,7 +75,6 @@ def get_gdal_layers(event, config: CloudConfig):
         delete_sqs_message(sqs_event, config)
 
     return datasets
-    # return pd.concat(pq_dfs) if pq_dfs else pq_dfs
 
 
 def cover_polygon_h3(h3_shape: h3.H3Shape, resolution: int):
@@ -104,21 +102,21 @@ def cover_shape_h3(geojson_dict: dict, resolution: int):
     return list(result_set)
 
 
-def get_db_comp(geojson_dict: dict, config: CloudConfig):
-    """Query Dynamo for entries that overlap with a geometry."""
-    part_keys = cover_shape_h3(geojson_dict, 3)
-    aoi_info = {}
-    res = config.dynamo.execute_statement(
-        Statement='SELECT * FROM tns_geodata_table'
-            f' WHERE h3_id in {part_keys}'
-    )
-    print('db_comp_res', res)
-    for i in res["Items"]:
-        aname = i["pk_and_model"]["S"]
-        if aname not in aoi_info.keys():
-            aoi_info[aname] = i["polygon"]["S"]
+# def get_db_comp(geojson_dict: dict, config: CloudConfig):
+#     """Query Dynamo for entries that overlap with a geometry."""
+#     part_keys = cover_shape_h3(geojson_dict, 3)
+#     aoi_info = {}
+#     res = config.dynamo.execute_statement(
+#         Statement='SELECT * FROM tns_geodata_table'
+#             f' WHERE h3_id in {part_keys}'
+#     )
+#     print('db_comp_res', res)
+#     for i in res["Items"]:
+#         aname = i["pk_and_model"]["S"]
+#         if aname not in aoi_info.keys():
+#             aoi_info[aname] = i["polygon"]["S"]
 
-    return aoi_info
+#     return aoi_info
 
 def get_entries_by_aoi_test_handler(aoi: str):
     config = CloudConfig()
@@ -151,9 +149,9 @@ def delete_if_found(aoi: str, config: CloudConfig | None = None):
     return
 
 
-def apply_delete(df: pd.DataFrame, config: CloudConfig):
+def apply_delete(feature: ogr.Feature, config: CloudConfig):
     try:
-        aoi = df.pk_and_model
+        aoi = feature.pk_and_model
         delete_if_found(aoi, config)
 
         publish_res = config.sns.publish(
@@ -185,16 +183,20 @@ def apply_delete(df: pd.DataFrame, config: CloudConfig):
 def db_delete_handler(event, context):
     config = CloudConfig()
     print("event", event)
-    pq_df = get_gdal_layers(event, config)
-    pq_df.apply(apply_delete, config=config, axis=1)
+    datasets = get_gdal_layers(event, config)
+    for ds in datasets:
+        layer = ds.GetLayer()
+        for feature in layer:
+            apply_delete(feature, config)
 
 
-def apply_add(df: pd.DataFrame, config: CloudConfig):
+def apply_add(feature: ogr.Feature, config: CloudConfig):
     try:
-        polygon_str = df.geometry
-        geojson_dict = json.loads(polygon_str)
-        aoi = df.pk_and_model
-        print("polygon_str", polygon_str)
+        geometry = feature.geometry()
+        geojson_str = geometry.ExportToJson()
+        geojson_dict = json.loads(geojson_str)
+        aoi = feature.pk_and_model
+        print("polygon_str", geojson_str)
         delete_if_found(aoi, config)
 
         # create new db entries for aoi-polygon combo
@@ -213,7 +215,7 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
                         "Item": {
                             "h3_id": {"S": pk},
                             "pk_and_model": {"S": aoi},
-                            "polygon": {"S": polygon_str},
+                            "polygon": {"S": geojson_str},
                         }
                     }
                 }
@@ -250,9 +252,11 @@ def apply_add(df: pd.DataFrame, config: CloudConfig):
 def db_add_handler(event, context):
     config = CloudConfig()
     print("event", event)
-    pq_df = get_gdal_layers(event, config)
-
-    pq_df.apply(apply_add, config=config, axis=1)
+    datasets = get_gdal_layers(event, config)
+    for ds in datasets:
+        layer = ds.GetLayer()
+        for feature in layer:
+            apply_add(feature, config)
 
 def apply_compare(df: pd.DataFrame, aois: pd.DataFrame, config: CloudConfig):
     name = uuid4()

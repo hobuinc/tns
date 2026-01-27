@@ -111,18 +111,37 @@ def get_event(message, action, tf_output):
 def states_geoms():
     states_json = json.load(open("./src/geoms.json"))
 
-    def feature_to_json_str(f):
+    def feature_to_wkb(f):
         p = Polygon(f["geometry"]["rings"][0])
-        mapping = geometry.mapping(box(*bounds(p)))
-        return json.dumps(mapping)
+        return p.wkb
 
-    states_dict = pd.DataFrame(
+    states_gdf = st.GeoDataFrame(
         [
-            {"pk_and_model": f"raster_{idx}", "geometry": feature_to_json_str(feature)}
+            {"pk_and_model": f"raster_{idx}", "geometry": feature_to_wkb(feature)}
             for idx, feature in enumerate(states_json["features"])
         ]
     )
-    yield states_dict.to_parquet()
+    yield states_gdf
+
+@pytest.fixture(scope="function")
+def states_tiles():
+    states_json = json.load(open("./src/geoms.json"))
+
+    def feature_to_wkb(f):
+        p = Polygon(f["geometry"]["rings"][0])
+        return p.wkb
+
+    # make gdf of size 1000
+    states_gdf = st.GeoDataFrame(
+        [
+            {"pk_and_model": f"raster_{idx}_{n}", "geometry": feature_to_wkb(feature)}
+            for idx, feature in enumerate(states_json["features"])
+            for n in range(20)
+        ]
+    )
+
+    return states_gdf
+
 
 
 @pytest.fixture(scope="session")
@@ -140,13 +159,13 @@ def dynamo(tf_output):
 
 
 @pytest.fixture(scope="function")
-def cleanup(tf_output):
+def cleanup(tf_output, config):
     aois_to_delete = []
 
     yield aois_to_delete
 
     for a in aois_to_delete:
-        delete_if_found(a)
+        delete_if_found(a, config)
 
 
 @pytest.fixture(scope="session")

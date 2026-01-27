@@ -11,6 +11,7 @@ from uuid import uuid4
 from itertools import islice, batched
 
 from shapely import from_geojson
+gdal.UseExceptions()
 
 class CloudConfig():
     def __init__(self, dynamo_cfg:dict=None):
@@ -101,22 +102,6 @@ def cover_shape_h3(geojson_dict: dict, resolution: int):
 
     return list(result_set)
 
-
-# def get_db_comp(geojson_dict: dict, config: CloudConfig):
-#     """Query Dynamo for entries that overlap with a geometry."""
-#     part_keys = cover_shape_h3(geojson_dict, 3)
-#     aoi_info = {}
-#     res = config.dynamo.execute_statement(
-#         Statement='SELECT * FROM tns_geodata_table'
-#             f' WHERE h3_id in {part_keys}'
-#     )
-#     print('db_comp_res', res)
-#     for i in res["Items"]:
-#         aname = i["pk_and_model"]["S"]
-#         if aname not in aoi_info.keys():
-#             aoi_info[aname] = i["polygon"]["S"]
-
-#     return aoi_info
 
 def get_entries_by_aoi_test_handler(aoi: str):
     config = CloudConfig()
@@ -359,18 +344,24 @@ def db_comp_handler(event, context):
 
         # iterate tiles and find h3 cover
         for feature in layer:
-            polygon_str = feature.geometry().ExportToJson()
-            polygon = from_geojson(polygon_str)
-            h3_ids = h3_ids + cover_shape_h3(polygon, 3)
+            print(feature)
+            geometry = feature.geometry()
+            if geometry is not None:
+                polygon_str = feature.geometry().ExportToJson()
+                polygon = from_geojson(polygon_str)
+                h3_ids = h3_ids + cover_shape_h3(polygon, 3)
         deduped = list(set(h3_ids))
 
         # query h3 index
-        statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                    f'WHERE h3_id IN {deduped}')
-        res = config.dynamo.execute_statement(Statement=statement)
         aoi_poly_map = {}
-        for aoi in res['Items']:
-            aoi_poly_map[aoi['pk_and_model']['S']] = aoi['polygon']['S']
+        # dynamodb has limit of 8192 characters in number of items in this
+        for dd_batched in batched(deduped, 50):
+            statement = (f'SELECT * FROM "{config.table_name}"."h3_idx" '
+                        f'WHERE h3_id IN {dd_batched}')
+            print(statement)
+            res = config.dynamo.execute_statement(Statement=statement)
+            for aoi in res['Items']:
+                aoi_poly_map[aoi['pk_and_model']['S']] = aoi['polygon']['S']
 
         # create ogr geometry from polygons
         for k,v in aoi_poly_map.items():
@@ -383,6 +374,7 @@ def db_comp_handler(event, context):
                 else:
                     aois_affected_map[tile_pk] = [k]
 
+        print('Aois Affected map:', json.dumps(aois_affected_map, indent=2))
         for tile_pk, aoi_list in aois_affected_map.items():
             name = f'{tile_pk}-{uuid4()}'
             sns_request_json = {
@@ -410,6 +402,8 @@ def db_comp_handler(event, context):
         )
         if resp.get("Failed"):
             raise ValueError(resp)
+        else:
+            print('SNS response:', resp)
 
     # return number of tiles which were associated with at least 1 subscription
     return len(sns_messages)

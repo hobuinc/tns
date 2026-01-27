@@ -57,7 +57,6 @@ fi
 cp -r "../src/." "$DOCKER_DIR/handlers/"
 echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
 docker buildx build --platform linux/${ARCH} \
-    --no-cache \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
     --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
     --build-arg RIE_ARCH=$RIE_ARCH \

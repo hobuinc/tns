@@ -1,5 +1,4 @@
 import json
-import pandas as pd
 import h3
 import os
 import boto3
@@ -8,14 +7,20 @@ from osgeo import gdal, ogr
 import traceback
 from botocore.config import Config
 from uuid import uuid4
-from itertools import islice, batched
-
-from shapely import from_geojson
+from itertools import batched
 
 gdal.UseExceptions()
 H3_RESOLUTION=3
 MAX_H3_IDS_SQL=50
 SNS_BATCH_LIMIT=10
+
+def set_dynamo_config():
+    return Config(
+        retries={"max_attempts": 8, "mode": "adaptive"},
+        tcp_keepalive=True,
+        read_timeout=30,
+        connect_timeout=10,
+    )
 
 
 class CloudConfig:
@@ -48,15 +53,6 @@ class CloudConfig:
         self.sqs = boto3.client("sqs", region_name=self.region)
 
 
-def s3_read_parquet(sns_event, config: CloudConfig):
-    s3_info = sns_event["s3"]
-    bucket = s3_info["bucket"]["name"]
-    key = s3_info["object"]["key"]
-    vsis_path = f"/vsis3/{bucket}/{key}"
-    gd = gdal.OpenEx(vsis_path)
-    return gd
-
-
 def delete_sqs_message(e, config: CloudConfig):
     print("deleting from this event", e)
     source_arn = e["eventSourceARN"]
@@ -68,10 +64,9 @@ def delete_sqs_message(e, config: CloudConfig):
     return config.sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
-# TODO wait to delete messages until after success
-# TODO write failed messages to deadletter queue
 def get_gdal_layers(event, config: CloudConfig):
     datasets = []
+    filenames = []
     for sqs_event in event["Records"]:
         body = json.loads(sqs_event["body"])
         message = json.loads(body["Message"])
@@ -80,11 +75,19 @@ def get_gdal_layers(event, config: CloudConfig):
             delete_sqs_message(sqs_event, config)
             continue
         for sns_event in message["Records"]:
-            dataset = s3_read_parquet(sns_event, config)
+            s3_info = sns_event["s3"]
+            bucket = s3_info["bucket"]["name"]
+            key = s3_info["object"]["key"]
+            vsis_path = f"/vsis3/{bucket}/{key}"
+
+            dataset = gdal.OpenEx(vsis_path)
+
             datasets.append(dataset)
+            filenames.append(vsis_path)
+
         delete_sqs_message(sqs_event, config)
 
-    return datasets
+    return zip(datasets, filenames)
 
 
 def cover_shape_h3(geojson_dict, resolution: int):
@@ -133,7 +136,7 @@ def delete_if_found(aoi: str, config: CloudConfig | None = None):
     return
 
 
-def apply_delete(feature: ogr.Feature, config: CloudConfig):
+def apply_delete(feature: ogr.Feature, filename: str, config: CloudConfig):
     try:
         aoi = feature.pk_and_model
         delete_if_found(aoi, config)
@@ -141,6 +144,7 @@ def apply_delete(feature: ogr.Feature, config: CloudConfig):
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
             MessageAttributes={
+                "source_file": {"DataType": "String", "StringValue": filename},
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {
                     "DataType": "String",
@@ -155,6 +159,7 @@ def apply_delete(feature: ogr.Feature, config: CloudConfig):
         publish_res = config.sns.publish(
             TopicArn=config.sns_out_arn,
             MessageAttributes={
+                "source_file": {"DataType": "String", "StringValue": filename},
                 "aoi": {"DataType": "String", "StringValue": aoi},
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
@@ -168,13 +173,13 @@ def db_delete_handler(event, context):
     config = CloudConfig()
     print("event", event)
     datasets = get_gdal_layers(event, config)
-    for ds in datasets:
+    for ds, filename in datasets:
         layer = ds.GetLayer()
         for feature in layer:
-            apply_delete(feature, config)
+            apply_delete(feature, filename, config)
 
 
-def apply_add(feature: ogr.Feature, config: CloudConfig):
+def apply_add(feature: ogr.Feature, filename:str, config: CloudConfig):
     try:
         geometry = feature.geometry()
         geojson_str = geometry.ExportToJson()
@@ -208,6 +213,7 @@ def apply_add(feature: ogr.Feature, config: CloudConfig):
             TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
+                "source_file": {"DataType": "String", "StringValue": filename},
                 "h3_indices": {
                     "DataType": "String.Array",
                     "StringValue": json.dumps(part_keys),
@@ -223,6 +229,7 @@ def apply_add(feature: ogr.Feature, config: CloudConfig):
             TopicArn=config.sns_out_arn,
             MessageAttributes={
                 "aoi": {"DataType": "String", "StringValue": aoi},
+                "source_file": {"DataType": "String", "StringValue": filename},
                 "status": {"DataType": "String", "StringValue": "failed"},
                 "error": {"DataType": "String", "StringValue": f"{e.args}"},
             },
@@ -235,185 +242,114 @@ def db_add_handler(event, context):
     config = CloudConfig()
     print("event", event)
     datasets = get_gdal_layers(event, config)
-    for ds in datasets:
+    for ds, filename in datasets:
         layer = ds.GetLayer()
         for feature in layer:
-            apply_add(feature, config)
+            apply_add(feature, filename, config)
 
-
-def apply_compare(df: pd.DataFrame, aois: pd.DataFrame, config: CloudConfig):
-    name = uuid4()
-    filtered_aois = aois[aois.h3_id.isin(df.h3_id)]
-    try:
-        polygon_str = df.loc[0].geometry
-        tile_polygon = from_geojson(polygon_str)
-
-        def aoi_comp(item, tp):
-            aoi_polygon = from_geojson(item.polygon)
-            if not aoi_polygon.disjoint(tp):
-                return item
-
-        aoi_impact_list = filtered_aois.apply(aoi_comp, tp=tile_polygon, axis=1)
-        if not aoi_impact_list.any():
-            return pd.NA
-        sns_request_json = {
-            "Id": f"{df.pk_and_model}-{name}",
-            "MessageAttributes": {
-                "tile_id": {
-                    "DataType": "String",
-                    "StringValue": df.pk_and_model,
-                },
-                "aois": {
-                    "DataType": "String.Array",
-                    "StringValue": json.dumps(aoi_impact_list),
-                },
-                "status": {"DataType": "String", "StringValue": "succeeded"},
-            },
-            "Message": f"{df.pk_and_model}-{name}",
-            "MessageGroupId": "compare",
-        }
-    except Exception as e:
-        sns_request_json = {
-            "Id": f"{name}",
-            "MessageAttributes": {
-                "status": {"DataType": "String", "StringValue": "failed"},
-                "error": {"DataType": "String", "StringValue": f"{e.args}"},
-            },
-            "Message": f"{name}",
-            "MessageGroupId": "compare",
-        }
-    return sns_request_json
-
-
-def set_dynamo_config():
-    return Config(
-        retries={"max_attempts": 8, "mode": "adaptive"},
-        tcp_keepalive=True,
-        read_timeout=30,
-        connect_timeout=10,
-    )
-
-
-def chunk(iterable, size):
-    it = iter(iterable)
-    while True:
-        batch = list(islice(it, size))
-        if not batch:
-            return
-        yield batch
-
-
-def apply_polygon(df: pd.DataFrame):
-    polygon_str = df.geometry
-    polygon = from_geojson(polygon_str)
-    h3_ids = cover_shape_h3(polygon, 3)
-    # return h3_ids
-    newdf = pd.DataFrame(
-        data=[
-            {"pk_and_model": df.pk_and_model, "geometry": df.geometry, "h3_id": h3}
-            for h3 in h3_ids
-        ]
-    )
-
-    return newdf
 
 # Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
 # AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
-# TODO errors send back failed message with file name
 # TODO may want to change names to clear on aoi/tile pk_and_model attributes,
 # but leaving for now in interest of time.
-# TODO wrap in error handler, send failure message for bad geometry
-# TODO figure out dateline splitting problems? alaska, etc. Ask Ryan.
-# - could split the polygon on the date line and process from there
-#   to prevent polygon from crossing
-# TODO add options in grid for other life cycle events (eg. data is scheduled to be moved to cold storage or something)
 def db_comp_handler(event, context):
     # create configs
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
     print("Event:", event)
-    event
 
     # grab data fraom s3
     datasets = get_gdal_layers(event, config)
 
     # iterate gdal dataset layers
-    # create list of h3_ids from
+    # create list of h3_ids from geometry
     # use h3_ids to query dynamo
     # filter layers by polygons produced from dynamo
     sns_messages = []
-    for ds in datasets:
-        # create tracking variables
-        aois_affected_map: dict[str, list] = {}
-        h3_ids = []
-        layer = ds.GetLayer()
-
+    for ds, filename in datasets:
         # iterate tiles and find h3 cover
-        for feature in layer:
-            print(feature)
-            geometry = feature.geometry()
-            if geometry is not None:
-                polygon_str = feature.geometry().ExportToJson()
-                # TODO double check this needs to be a polygon
-                polygon = from_geojson(polygon_str)
-                h3_ids = h3_ids + cover_shape_h3(polygon, H3_RESOLUTION)
-        deduped = list(set(h3_ids))
+        try:
+            # create tracking variables
+            aois_affected_map: dict[str, list] = {}
+            h3_ids = []
+            layer = ds.GetLayer()
+            for feature in layer:
+                geometry = feature.geometry()
+                if geometry is not None:
+                    polygon_str = feature.geometry().ExportToJson()
+                    # TODO double check this needs to be a polygon
+                    # polygon = from_geojson(polygon_str)
+                    h3_ids = h3_ids + cover_shape_h3(json.loads(polygon_str), H3_RESOLUTION)
+            deduped = list(set(h3_ids))
 
-        # query h3 index
-        aoi_poly_map = {}
-        # limit of 50 in IN method
-        for dd_batched in batched(deduped, MAX_H3_IDS_SQL):
-            statement = (
-                f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                f"WHERE h3_id IN {dd_batched}"
-            )
-            print(statement)
-            res = config.dynamo.execute_statement(Statement=statement)
-            for aoi in res["Items"]:
-                aoi_poly_map[aoi["pk_and_model"]["S"]] = aoi["polygon"]["S"]
+            # query h3 index
+            aoi_poly_map = {}
+            # limit of 50 in IN method
+            for dd_batched in batched(deduped, MAX_H3_IDS_SQL):
+                statement = (
+                    f'SELECT * FROM "{config.table_name}"."h3_idx" '
+                    f"WHERE h3_id IN {dd_batched}"
+                )
+                res = config.dynamo.execute_statement(Statement=statement)
+                for aoi in res["Items"]:
+                    ogr_geom = ogr.CreateGeometryFromJson(aoi["polygon"]["S"])
+                    aoi_poly_map[aoi["pk_and_model"]["S"]] = ogr_geom
 
-        # create ogr geometry from polygons
-        # TODO make sure we're doing not disjoint operation
-        for aoi_pk, geom in aoi_poly_map.items():
-            # TODO move this to line 371
-            geom = ogr.CreateGeometryFromJson(geom)
-            # TODO check if gdal takes reference to this
-            # if so, use gdal Clone
-            layer.SetSpatialFilter(geom)
-            tile_pks = [feature.pk_and_model for feature in layer]
-            if aoi_pk in aois_affected_map:
-                aois_affected_map[aoi_pk] = aois_affected_map[aoi_pk] + tile_pks
-            else:
-                aois_affected_map[aoi_pk] = tile_pks
+            # create ogr geometry from polygons
+            # TODO make sure we're doing not disjoint operation
+            for aoi_pk, geom in aoi_poly_map.items():
+                # TODO check if gdal takes reference to this
+                # if so, use gdal Clone
+                layer.SetSpatialFilter(geom)
+                tile_pks = [feature.pk_and_model for feature in layer]
+                if aoi_pk in aois_affected_map:
+                    aois_affected_map[aoi_pk] = aois_affected_map[aoi_pk] + tile_pks
+                else:
+                    aois_affected_map[aoi_pk] = tile_pks
 
-        print("Not Disjoint AOI set:", json.dumps(aois_affected_map, indent=2))
-        # maximum number of tiles that can be implicated here is 10k in the end
-        # should not exceed the sqs limits
-        for aoi_pk, tile_list in aois_affected_map.items():
-            name = f"{aoi_pk}-{uuid4()}"
+            print("Not Disjoint AOI set:", json.dumps(aois_affected_map, indent=2))
+            # maximum number of tiles that can be implicated here is 10k in the end
+            # should not exceed the sqs limits
+            for aoi_pk, tile_list in aois_affected_map.items():
+                name = f"{aoi_pk}-{uuid4()}"
+                sns_request_json = {
+                    "Id": name,
+                    "MessageAttributes": {
+                        "source_file": {"DataType": "String", "StringValue": filename},
+                        "aoi_id": {
+                            "DataType": "String",
+                            "StringValue": aoi_pk,
+                        },
+                        "tiles": {
+                            "DataType": "String.Array",
+                            "StringValue": json.dumps(tile_list),
+                        },
+                        "status": {"DataType": "String", "StringValue": "succeeded"},
+                    },
+                    "Message": name,
+                    "MessageGroupId": "compare",
+                }
+                sns_messages.append(sns_request_json)
+        except Exception as e:
+            name = uuid4()
             sns_request_json = {
-                "Id": name,
+                "Id": f"{name}",
                 "MessageAttributes": {
-                    "aoi_id": {
-                        "DataType": "String",
-                        "StringValue": aoi_pk,
-                    },
-                    "tiles": {
-                        "DataType": "String.Array",
-                        "StringValue": json.dumps(tile_list),
-                    },
-                    "status": {"DataType": "String", "StringValue": "succeeded"},
+                    "source_file": {"DataType": "String", "StringValue": filename},
+                    "status": {"DataType": "String", "StringValue": "failed"},
+                    "error": {"DataType": "String", "StringValue": f"{e.args}"},
                 },
-                "Message": name,
+                "Message": f"{name}",
                 "MessageGroupId": "compare",
             }
             sns_messages.append(sns_request_json)
 
-    for chunk in batched(sns_messages, SNS_BATCH_LIMIT):
+
+    for batch in batched(sns_messages, SNS_BATCH_LIMIT):
         resp = config.sns.publish_batch(
-            TopicArn=config.sns_out_arn, PublishBatchRequestEntries=chunk
+            TopicArn=config.sns_out_arn, PublishBatchRequestEntries=batch
         )
         if resp.get("Failed"):
             raise ValueError(resp)

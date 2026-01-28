@@ -132,7 +132,7 @@ def test_big(tf_output, pk_and_model, states_tiles, h3_indices, cleanup, states_
     put_parquet("add", tf_output, states_geoms)
     cleanup = cleanup + [f"raster_1234_{n}" for n in range(50)]
 
-    tile_count = 10**5
+    tile_count = 10**6
     batch_size = 1000
     count = ceil(tile_count / batch_size)
     for n in range(count):
@@ -143,20 +143,14 @@ def test_big(tf_output, pk_and_model, states_tiles, h3_indices, cleanup, states_
         messages = sqs_listen(comp_sqs_out, region, retries=0)
         for msg in messages:
             body = json.loads(msg["Body"])
-            message_str = body["Message"]
-            assert message_str[:4] == "AOI:"
-            assert message_str[-5:] == "added"
 
             attrs = body["MessageAttributes"]
 
             status = attrs["status"]["Value"]
             assert status == "succeeded"
 
-            assert attrs["aoi"]["Value"]
-
-            h3s = json.loads(attrs["h3_indices"]["Value"])
-            for h in h3s:
-                assert h in h3_indices
+            assert attrs["aoi_id"]["Value"]
+            assert attrs["tiles"]["Value"]
 
             delete_sqs_message(msg, comp_sqs_out, region)
             msg_count += 1

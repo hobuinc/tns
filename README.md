@@ -11,10 +11,11 @@ The main vehicle for this project is [Terraform](https://www.terraform.io/), whi
 
 TNS is split into 4 sections of operation:
 1. Installing Dependencies
-2. Initializing
-3. Managing Infrastructure
-4. Testing
-5. Building Docker Image
+2. Quickstart
+3. Initializing
+4. Managing Infrastructure
+5. Testing
+6. Building Docker Image
 
 ### Installing Dependencies
 Create an environment that has packages specified in `environment.yaml`. If you choose to use `conda` for this, run `conda env create -f environment.yaml`. This will create a conda environment with the name `tns`. This environment is only needed on your local machine for the initial installation so that we can install python packages and run `terraform`.
@@ -24,6 +25,26 @@ git clone git@github.com/hobuinc/tns.git
 cd tns
 conda env create -f environment.yaml
 ```
+
+### Quickstart
+1. Make sure system has appropriate permissions (see permissions.json, adjust `account_id` and `aws_region`)
+2. Create docker container
+    ```
+    ./scripts/docker_init
+    ```
+3. From system with internet:
+    ```
+    ./scripts/init
+    ```
+4. From system without internet
+    i. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example
+    ii. Run terraform
+        ```
+        VAR_PATH="var-file.tfvars" # the path to the variables file
+        ./scripts/up $VAR_PATH
+        ```
+
+**note: This is only for deployment, see [Testing](#testing)
 
 ### Initializing on Local
 This process will install all of the providers to the default location that `Terraform` looks for them, in `.terraform/plugins`. This will also install the necessary python packages into a zip file for usage with the lambda functions that are created. You will need access to the open web for this action.
@@ -103,11 +124,11 @@ For deployment mode, you'll be deploying the full set of architecture, and then 
 # aws_region="us-east-1"
 # sts_lambda_role_name="TNS_Testing_Role" # this is the default
 # s3_bucket_name="grid-dev-tns" # specify a custom bucket name as needed
-# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.us-east-1.amazonaws.com/tns_ecr:arm64" # specify ecr_image_uri if you built the image outside of terraform using the docker_init script
+# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.us-east-1.amazonaws.com/tns_ecr:x86_64" # specify ecr_image_uri if you built the image outside of terraform using the docker_init script
 
 ./scripts/up $VAR_FILE # deploy the production environment
 pytest src/test_deployment.py
 ```
 
 #### Building the Docker image
-The docker image will need to be built and deployed separately from Terraform. This can be done by using `./scripts/docker_init`. You may need to first install QEMU by following the directions at https://docs.docker.com/build/building/multi-platform/#qemu. You may also need to set env variable AWS_DEFAULT_REGION="us-east-1". Once the container is built, copy the image uri into an ecr_image_uri variable in your terraform variables file. 
+The docker image will need to be built and deployed separately from Terraform. This can be done by using `./scripts/docker_init`. You may need to first install QEMU by following the directions at https://docs.docker.com/build/building/multi-platform/#qemu. You may also need to set env variable AWS_DEFAULT_REGION="us-east-1". Once the container is built, copy the image uri into an ecr_image_uri variable in your terraform variables file.

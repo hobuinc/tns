@@ -5,7 +5,7 @@ resource aws_lambda_function db_add_lambda_function {
 
     image_uri = var.image_uri
     package_type="Image"
-    architectures = ["arm64"]
+    architectures = ["x86_64"]
     image_config {
         command = ["tns_lambda.db_lambda.db_add_handler"]
     }
@@ -16,6 +16,7 @@ resource aws_lambda_function db_add_lambda_function {
             SNS_OUT_ARN: var.db_add_sns_out_arn
         }
     }
+
     lifecycle {
         replace_triggered_by = [ null_resource.always_run ]
     }

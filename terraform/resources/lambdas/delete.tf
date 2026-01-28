@@ -5,7 +5,7 @@ resource aws_lambda_function db_delete_lambda_function {
 
     image_uri = var.image_uri
     package_type="Image"
-    architectures = ["arm64"]
+    architectures = ["x86_64"]
     image_config {
         command = ["tns_lambda.db_lambda.db_delete_handler"]
     }

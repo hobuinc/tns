@@ -7,3 +7,6 @@ dependencies:
   - python
   - h3-py
   - geopandas
+  - pyarrow
+  - python<3.14
+  - jq

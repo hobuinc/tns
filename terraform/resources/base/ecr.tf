@@ -6,7 +6,7 @@ variable ecr_image_uri {
 
 locals {
     ecr_repository_name = "tns_ecr"
-    arch = "arm64"
+    arch = "linux/amd64"
     python_version = "3.13"
     image_uri = (var.ecr_image_uri == "" ?
         "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}" :
@@ -65,10 +65,6 @@ data aws_ecr_image runner_image {
     image_tag = local.arch
     depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
 }
-
-# output container {
-#     value = "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.arch}"
-# }
 
 output image_uri {
     value = local.image_uri

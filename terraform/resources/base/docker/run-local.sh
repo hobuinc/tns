@@ -31,7 +31,7 @@ then
     echo "docker run -p $LOCALPORT:$REMOTEPORT -e AWS_DEFAULT_REGION=$REGION -e AWS_ACCESS_KEY_ID=${KEY_ID} -e AWS_SECRET_ACCESS_KEY=${SECRET_ID} $CONTAINER $command"
 
     docker run -p $LOCALPORT:$REMOTEPORT \
-        --platform linux/arm64 \
+        --platform linux/x86_64 \
         -e AWS_DEFAULT_REGION=$REGION \
         -e AWS_ACCESS_KEY_ID=${KEY_ID} \
         -e AWS_SECRET_ACCESS_KEY=${SECRET_ID} \

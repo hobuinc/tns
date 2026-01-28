@@ -317,22 +317,24 @@ def apply_polygon(df: pd.DataFrame):
 
     return newdf
 
-
 # Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
 # AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
+# TODO errors send back failed message with file name
 # TODO may want to change names to clear on aoi/tile pk_and_model attributes,
 # but leaving for now in interest of time.
 # TODO wrap in error handler, send failure message for bad geometry
 # TODO figure out dateline splitting problems? alaska, etc. Ask Ryan.
 # - could split the polygon on the date line and process from there
 #   to prevent polygon from crossing
+# TODO add options in grid for other life cycle events (eg. data is scheduled to be moved to cold storage or something)
 def db_comp_handler(event, context):
     # create configs
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
     print("Event:", event)
+    event
 
     # grab data fraom s3
     datasets = get_gdal_layers(event, config)
@@ -374,34 +376,33 @@ def db_comp_handler(event, context):
 
         # create ogr geometry from polygons
         # TODO make sure we're doing not disjoint operation
-        for k, v in aoi_poly_map.items():
+        for aoi_pk, geom in aoi_poly_map.items():
             # TODO move this to line 371
-            geom = ogr.CreateGeometryFromJson(v)
+            geom = ogr.CreateGeometryFromJson(geom)
             # TODO check if gdal takes reference to this
             # if so, use gdal Clone
             layer.SetSpatialFilter(geom)
-            for feature in layer:
-                tile_pk = feature.pk_and_model
-                if tile_pk in aois_affected_map:
-                    aois_affected_map[tile_pk].append(k)
-                else:
-                    aois_affected_map[tile_pk] = [k]
+            tile_pks = [feature.pk_and_model for feature in layer]
+            if aoi_pk in aois_affected_map:
+                aois_affected_map[aoi_pk] = aois_affected_map[aoi_pk] + tile_pks
+            else:
+                aois_affected_map[aoi_pk] = tile_pks
 
         print("Not Disjoint AOI set:", json.dumps(aois_affected_map, indent=2))
-        for tile_pk, aoi_list in aois_affected_map.items():
-            name = f"{tile_pk}-{uuid4()}"
-            # TODO batch aoi_list if it's too big, protect from
-            # getting to big, itertools batch
+        # maximum number of tiles that can be implicated here is 10k in the end
+        # should not exceed the sqs limits
+        for aoi_pk, tile_list in aois_affected_map.items():
+            name = f"{aoi_pk}-{uuid4()}"
             sns_request_json = {
                 "Id": name,
                 "MessageAttributes": {
-                    "tile_id": {
+                    "aoi_id": {
                         "DataType": "String",
-                        "StringValue": feature.pk_and_model,
+                        "StringValue": aoi_pk,
                     },
-                    "aois": {
+                    "tiles": {
                         "DataType": "String.Array",
-                        "StringValue": json.dumps(aoi_list),
+                        "StringValue": json.dumps(tile_list),
                     },
                     "status": {"DataType": "String", "StringValue": "succeeded"},
                 },
@@ -420,4 +421,4 @@ def db_comp_handler(event, context):
             print("SNS response:", resp)
 
     # return number of tiles which were associated with at least 1 subscription
-    return len(sns_messages)
+    return sns_messages

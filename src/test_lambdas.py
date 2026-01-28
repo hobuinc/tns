@@ -1,5 +1,6 @@
 import os
 import boto3
+import json
 
 from db_lambda import db_add_handler, db_comp_handler, db_delete_handler
 from db_lambda import get_entries_by_aoi
@@ -31,11 +32,15 @@ def test_comp(tf_output, comp_event, db_fill):
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["db_compare_sns_out"]
     os.environ["DB_TABLE_NAME"] = tf_output["table_name"]
-    print("sns")
     print(tf_output["db_compare_sns_out"])
 
     aois = db_comp_handler(comp_event, None)
-    assert aois == 1000
+    assert len(aois) == 1
+    for aoi_res in aois:
+        attrs = aoi_res['MessageAttributes']
+        tiles = json.loads(attrs['tiles']['StringValue'])
+        assert len(tiles) == 1000
+
     clear_sqs(tf_output["db_compare_sqs_out"], tf_output["aws_region"])
     clear_sqs(tf_output["db_compare_sqs_in"], tf_output["aws_region"])
 

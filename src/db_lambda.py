@@ -171,7 +171,7 @@ def apply_delete(feature: ogr.Feature, filename: str, config: CloudConfig):
 
 def db_delete_handler(event, context):
     config = CloudConfig()
-    print("event", event)
+    print("Event:", json.dumps(event))
     datasets = get_gdal_layers(event, config)
     for ds, filename in datasets:
         layer = ds.GetLayer()
@@ -240,7 +240,7 @@ def apply_add(feature: ogr.Feature, filename:str, config: CloudConfig):
 
 def db_add_handler(event, context):
     config = CloudConfig()
-    print("event", event)
+    print("Event:", json.dumps(event))
     datasets = get_gdal_layers(event, config)
     for ds, filename in datasets:
         layer = ds.GetLayer()
@@ -258,7 +258,7 @@ def db_comp_handler(event, context):
     # create configs
     dynamo_cfg = set_dynamo_config()
     config = CloudConfig(dynamo_cfg)
-    print("Event:", event)
+    print("Event:", json.dumps(event))
 
     # grab data fraom s3
     datasets = get_gdal_layers(event, config)
@@ -298,7 +298,6 @@ def db_comp_handler(event, context):
                     aoi_poly_map[aoi["pk_and_model"]["S"]] = ogr_geom
 
             # create ogr geometry from polygons
-            # TODO make sure we're doing not disjoint operation
             for aoi_pk, geom in aoi_poly_map.items():
                 # TODO check if gdal takes reference to this
                 # if so, use gdal Clone
@@ -309,7 +308,8 @@ def db_comp_handler(event, context):
                 else:
                     aois_affected_map[aoi_pk] = tile_pks
 
-            print("Not Disjoint AOI set:", json.dumps(aois_affected_map, indent=2))
+            if aois_affected_map:
+                print(f'AOIs found. Pushing to SNS Topic {config.sns_out_arn}.')
             # maximum number of tiles that can be implicated here is 10k in the end
             # should not exceed the sqs limits
             for aoi_pk, tile_list in aois_affected_map.items():

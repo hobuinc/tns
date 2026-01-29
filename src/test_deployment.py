@@ -4,10 +4,7 @@ import polars_st as st
 from time import sleep
 from math import ceil
 from shapely import from_geojson
-<<<<<<< HEAD
-=======
 from uuid import uuid4
->>>>>>> b1dfe5b
 
 from db_lambda import get_entries_by_aoi
 
@@ -35,10 +32,7 @@ def clear_sqs(sqs_arn, region):
 
 
 def put_parquet(action, tf_output, gdf):
-<<<<<<< HEAD
-=======
     uuid = uuid4()
->>>>>>> b1dfe5b
     bucket_name = tf_output["s3_bucket_name"]
     key = f"{action}/{uuid}.parquet"
 

@@ -389,11 +389,12 @@ def delete_event(delete_message, tf_output):
 
 
 @pytest.fixture(scope="function")
-def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices):
+def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices, cleanup):
     db_name = tf_output["table_name"]
     aws_region = tf_output["aws_region"]
     dynamo = boto3.client("dynamodb", region_name=aws_region)
     aoi_name = f"{pk_and_model}_0"
+    cleanup.append(aoi_name)
 
     # make sure that old entries are deleted before using
     for pk in h3_indices:

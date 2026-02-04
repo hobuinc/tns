@@ -10,9 +10,10 @@ from uuid import uuid4
 from itertools import batched
 
 gdal.UseExceptions()
-H3_RESOLUTION=3
-MAX_H3_IDS_SQL=50
-SNS_BATCH_LIMIT=10
+H3_RESOLUTION = 3
+MAX_H3_IDS_SQL = 50
+SNS_BATCH_LIMIT = 10
+
 
 def set_dynamo_config():
     return Config(
@@ -64,16 +65,13 @@ def delete_sqs_message(e, config: CloudConfig):
     return config.sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
 
 
-def get_gdal_layers(event, config: CloudConfig):
+def get_gdal_layers(sqs_event):
     datasets = []
     filenames = []
-    for sqs_event in event["Records"]:
-        body = json.loads(sqs_event["body"])
-        message = json.loads(body["Message"])
-        # skip TestEvent
-        if "Event" in message and message["Event"] == "s3:TestEvent":
-            delete_sqs_message(sqs_event, config)
-            continue
+    body = json.loads(sqs_event["body"])
+    message = json.loads(body["Message"])
+    # skip TestEvent
+    if "Event" not in message or message["Event"] != "s3:TestEvent":
         for sns_event in message["Records"]:
             s3_info = sns_event["s3"]
             bucket = s3_info["bucket"]["name"]
@@ -84,8 +82,6 @@ def get_gdal_layers(event, config: CloudConfig):
 
             datasets.append(dataset)
             filenames.append(vsis_path)
-
-        delete_sqs_message(sqs_event, config)
 
     return zip(datasets, filenames)
 
@@ -99,7 +95,6 @@ def cover_shape_h3(geojson_dict, resolution: int):
     # h3 automatically handles Polygon and Multipolygon
     h3_shape = h3.geo_to_h3shape(geojson_dict)
     # get h3 indices
-    # TODO check on overlap, could we do bbox_overlap
     cells = h3.polygon_to_cells_experimental(h3_shape, resolution, "overlap")
 
     return cells
@@ -133,7 +128,6 @@ def delete_if_found(aoi: str, config: CloudConfig | None = None):
     for i in scanned["Items"]:
         i.pop("polygon")
         config.dynamo.delete_item(TableName=config.table_name, Key=i)
-    return
 
 
 def apply_delete(feature: ogr.Feature, filename: str, config: CloudConfig):
@@ -172,14 +166,17 @@ def apply_delete(feature: ogr.Feature, filename: str, config: CloudConfig):
 def db_delete_handler(event, context):
     config = CloudConfig()
     print("Event:", json.dumps(event))
-    datasets = get_gdal_layers(event, config)
-    for ds, filename in datasets:
-        layer = ds.GetLayer()
-        for feature in layer:
-            apply_delete(feature, filename, config)
+    events = event["Records"]
+    for sqs_event in events:
+        datasets = get_gdal_layers(sqs_event)
+        for ds, filename in datasets:
+            layer = ds.GetLayer()
+            for feature in layer:
+                apply_delete(feature, filename, config)
+        delete_sqs_message(sqs_event, config)
 
 
-def apply_add(feature: ogr.Feature, filename:str, config: CloudConfig):
+def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
     try:
         geometry = feature.geometry()
         geojson_str = geometry.ExportToJson()
@@ -241,27 +238,19 @@ def apply_add(feature: ogr.Feature, filename:str, config: CloudConfig):
 def db_add_handler(event, context):
     config = CloudConfig()
     print("Event:", json.dumps(event))
-    datasets = get_gdal_layers(event, config)
-    for ds, filename in datasets:
-        layer = ds.GetLayer()
-        for feature in layer:
-            apply_add(feature, filename, config)
+    events = event["Records"]
+    for sqs_event in events:
+        datasets = get_gdal_layers(sqs_event)
+        for ds, filename in datasets:
+            layer = ds.GetLayer()
+            for feature in layer:
+                apply_add(feature, filename, config)
+        delete_sqs_message(sqs_event, config)
 
 
-# Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
-# AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
-# have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
-# {TileModel}_{TilePK}. All aois will come in in EPSG:4326
-# TODO may want to change names to clear on aoi/tile pk_and_model attributes,
-# but leaving for now in interest of time.
-def db_comp_handler(event, context):
-    # create configs
-    dynamo_cfg = set_dynamo_config()
-    config = CloudConfig(dynamo_cfg)
-    print("Event:", json.dumps(event))
-
+def apply_compare(sqs_event, config):
     # grab data fraom s3
-    datasets = get_gdal_layers(event, config)
+    datasets = get_gdal_layers(sqs_event)
 
     # iterate gdal dataset layers
     # create list of h3_ids from geometry
@@ -281,7 +270,9 @@ def db_comp_handler(event, context):
                     polygon_str = feature.geometry().ExportToJson()
                     # TODO double check this needs to be a polygon
                     # polygon = from_geojson(polygon_str)
-                    h3_ids = h3_ids + cover_shape_h3(json.loads(polygon_str), H3_RESOLUTION)
+                    h3_ids = h3_ids + cover_shape_h3(
+                        json.loads(polygon_str), H3_RESOLUTION
+                    )
             deduped = list(set(h3_ids))
 
             # query h3 index
@@ -309,7 +300,7 @@ def db_comp_handler(event, context):
                     aois_affected_map[aoi_pk] = tile_pks
 
             if aois_affected_map:
-                print(f'AOIs found. Pushing to SNS Topic {config.sns_out_arn}.')
+                print(f"AOIs found. Pushing to SNS Topic {config.sns_out_arn}.")
             # maximum number of tiles that can be implicated here is 10k in the end
             # should not exceed the sqs limits
             for aoi_pk, tile_list in aois_affected_map.items():
@@ -346,7 +337,6 @@ def db_comp_handler(event, context):
             }
             sns_messages.append(sns_request_json)
 
-
     for batch in batched(sns_messages, SNS_BATCH_LIMIT):
         resp = config.sns.publish_batch(
             TopicArn=config.sns_out_arn, PublishBatchRequestEntries=batch
@@ -355,6 +345,27 @@ def db_comp_handler(event, context):
             raise ValueError(resp)
         else:
             print("SNS response:", resp)
+
+    return sns_messages
+
+
+# Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
+# AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
+# have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
+# {TileModel}_{TilePK}. All aois will come in in EPSG:4326
+# TODO may want to change names to clear on aoi/tile pk_and_model attributes,
+# but leaving for now in interest of time.
+def db_comp_handler(event, context):
+    # create configs
+    dynamo_cfg = set_dynamo_config()
+    config = CloudConfig(dynamo_cfg)
+    print("Event:", json.dumps(event))
+
+    events = event["Records"]
+    sns_messages = []
+    for sqs_event in events:
+        sns_messages = sns_messages + apply_compare(sqs_event, config)
+        delete_sqs_message(sqs_event, config)
 
     # return number of tiles which were associated with at least 1 subscription
     return sns_messages

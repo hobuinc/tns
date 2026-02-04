@@ -142,7 +142,7 @@ def test_big(tf_output, pk_and_model, states_tiles, h3_indices, cleanup, states_
 
     msg_count = 0
     failed = []
-    while msg_count < count:
+    while msg_count < count * 50:
         messages = sqs_listen(comp_sqs_out, region, retries=0)
         for msg in messages:
             body = json.loads(msg["Body"])
@@ -183,9 +183,11 @@ def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
         assert message["MessageAttributes"]["status"]["Value"] == "succeeded", (
             f"Error from SQS {message['MessageAttributes']['error']['Value']}"
         )
-        aois = json.loads(message["MessageAttributes"]["aois"]["Value"])
-        assert len(aois) == 1
-        assert aois[0] == aoi_name
+        aoi_id = message["MessageAttributes"]["aoi_id"]["Value"]
+        tiles = json.loads(message["MessageAttributes"]["tiles"]["Value"])
+        assert len(tiles) == 1
+        assert tiles[0] == 'raster_1234_0'
+        assert aoi_id == aoi_name
 
     # should be no messages left in the input queue
     sleep(30)  # the visibility timeout we have to wait out to be sure
@@ -285,23 +287,23 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices, config):
     sqs_out = tf_output["db_delete_sqs_out"]
 
     clear_sqs(sqs_out, region)
+    aoi_id = f'{pk_and_model}_0'
 
-    og_items = get_entries_by_aoi(pk_and_model, config)
+    og_items = get_entries_by_aoi(aoi_id, config)
     assert og_items["Count"] == 3
     for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == f"{pk_and_model}"
+        assert i["pk_and_model"]["S"] == aoi_id
         assert i["h3_id"]["S"] in h3_indices
 
-    # sns_publish(sns_in, region, pk_and_model)
     geom_delete = from_geojson(geom)
-    put_polygon("delete", tf_output, geom_delete, pk_and_model)
+    put_polygon("delete", tf_output, geom_delete, aoi_id)
     messages = sqs_listen(sqs_out, region)
     for msg in messages:
         body = json.loads(msg["Body"])
         message_str = body["Message"]
-        assert message_str == f"AOI: {pk_and_model} deleted"
+        assert message_str == f"AOI: {aoi_id} deleted"
 
-    deleted_items = get_entries_by_aoi(pk_and_model, config)
+    deleted_items = get_entries_by_aoi(aoi_id, config)
     assert deleted_items["Count"] == 0
     assert len(deleted_items["Items"]) == 0
 

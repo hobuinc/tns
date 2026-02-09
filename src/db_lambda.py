@@ -186,7 +186,7 @@ def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
         delete_if_found(aoi, config)
 
         # create new db entries for aoi-polygon combo
-        part_keys = cover_shape_h3(geojson_dict, 3)
+        part_keys = list(set(cover_shape_h3(geojson_dict, 3)))
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 

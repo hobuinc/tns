@@ -281,7 +281,7 @@ def apply_compare(sqs_event, config):
             for dd_batched in batched(deduped, MAX_H3_IDS_SQL):
                 statement = (
                     f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                    f"WHERE h3_id IN {dd_batched}"
+                    f'WHERE "h3_id" IN {list(dd_batched)}'
                 )
                 res = config.dynamo.execute_statement(Statement=statement)
                 for aoi in res["Items"]:

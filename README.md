@@ -124,7 +124,7 @@ For deployment mode, you'll be deploying the full set of architecture, and then 
 # aws_region="us-east-1"
 # sts_lambda_role_name="TNS_Testing_Role" # this is the default
 # s3_bucket_name="grid-dev-tns" # specify a custom bucket name as needed
-# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.us-east-1.amazonaws.com/tns_ecr:x86_64" # specify ecr_image_uri if you built the image outside of terraform using the docker_init script
+# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.us-east-1.amazonaws.com/tns_ecr:amd64" # specify ecr_image_uri if you built the image outside of terraform using the docker_init script
 
 ./scripts/up $VAR_FILE # deploy the production environment
 pytest src/test_deployment.py

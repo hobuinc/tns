@@ -108,7 +108,7 @@ def get_entries_by_aoi_test_handler(aoi: str):
 
 def get_entries_by_aoi(aoi: str, config: CloudConfig):
     """Scan Dynamo for entries with a specific AOI key."""
-    a = config.dynamo.query(
+    res = config.dynamo.query(
         TableName=config.table_name,
         IndexName="pk_and_model",
         KeyConditionExpression="pk_and_model = :pk_and_model",
@@ -116,18 +116,33 @@ def get_entries_by_aoi(aoi: str, config: CloudConfig):
             ":pk_and_model": {"S": aoi},
         },
     )
-    return a
+    if not res["Count"]:
+        return []
+    items = res['Items']
+    while True:
+        if 'LastEvaluatedKey' in res.keys():
+            last = res["LastEvaluatedKey"]
+            res = config.dynamo.query(
+                TableName=config.table_name,
+                IndexName="pk_and_model",
+                KeyConditionExpression="pk_and_model = :pk_and_model",
+                ExpressionAttributeValues={
+                    ":pk_and_model": {"S": aoi},
+                },
+                ExclusiveStartKey=last
+            )
+            items = items + res['Items']
+        else:
+            break
+    return items
 
 
 def delete_if_found(aoi: str, config: CloudConfig | None = None):
     """Delete entries from dynamo."""
     if config is None:
         config = CloudConfig()
-    res = get_entries_by_aoi(aoi, config)
-    if res["Count"] == 0:
-        return
-    for i in res["Items"]:
-        i.pop("polygon")
+    items = get_entries_by_aoi(aoi, config)
+    for i in items:
         config.dynamo.delete_item(TableName=config.table_name, Key=i)
 
 

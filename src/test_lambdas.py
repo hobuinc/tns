@@ -27,7 +27,6 @@ def clear_sqs(sqs_arn, region):
             break
     return messages
 
-
 def test_comp(tf_output, comp_event, db_fill):
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["db_compare_sns_out"]

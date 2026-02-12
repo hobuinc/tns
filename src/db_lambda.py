@@ -8,6 +8,7 @@ import traceback
 from botocore.config import Config
 from uuid import uuid4
 from itertools import batched
+from shapely import from_wkb
 
 gdal.UseExceptions()
 H3_RESOLUTION = 3
@@ -179,10 +180,9 @@ def db_delete_handler(event, context):
 def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
     try:
         geometry = feature.geometry()
-        geojson_str = geometry.ExportToJson()
-        geojson_dict = json.loads(geojson_str)
+        wkb = bytes(geometry.ExportToWkb())
+        geojson_dict = from_wkb(wkb)
         aoi = feature.pk_and_model
-        print("polygon_str", geojson_str)
         delete_if_found(aoi, config)
 
         # create new db entries for aoi-polygon combo
@@ -199,7 +199,7 @@ def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
                         "Item": {
                             "h3_id": {"S": pk},
                             "pk_and_model": {"S": aoi},
-                            "polygon": {"S": geojson_str},
+                            "polygon": {"B": wkb},
                         }
                     }
                 }
@@ -285,7 +285,7 @@ def apply_compare(sqs_event, config):
                 )
                 res = config.dynamo.execute_statement(Statement=statement)
                 for aoi in res["Items"]:
-                    ogr_geom = ogr.CreateGeometryFromJson(aoi["polygon"]["S"])
+                    ogr_geom = ogr.CreateGeometryFromWkb(aoi["polygon"]["B"])
                     aoi_poly_map[aoi["pk_and_model"]["S"]] = ogr_geom
 
             # create ogr geometry from polygons

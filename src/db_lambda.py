@@ -107,10 +107,10 @@ def get_entries_by_aoi_test_handler(aoi: str):
 
 def get_entries_by_aoi(aoi: str, config: CloudConfig):
     """Scan Dynamo for entries with a specific AOI key."""
-    a = config.dynamo.scan(
+    a = config.dynamo.query(
         TableName=config.table_name,
         IndexName="pk_and_model",
-        FilterExpression="pk_and_model = :pk_and_model",
+        KeyConditionExpression="pk_and_model = :pk_and_model",
         ExpressionAttributeValues={
             ":pk_and_model": {"S": aoi},
         },
@@ -122,10 +122,10 @@ def delete_if_found(aoi: str, config: CloudConfig | None = None):
     """Delete entries from dynamo."""
     if config is None:
         config = CloudConfig()
-    scanned = get_entries_by_aoi(aoi, config)
-    if scanned["Count"] == 0:
+    res = get_entries_by_aoi(aoi, config)
+    if res["Count"] == 0:
         return
-    for i in scanned["Items"]:
+    for i in res["Items"]:
         i.pop("polygon")
         config.dynamo.delete_item(TableName=config.table_name, Key=i)
 

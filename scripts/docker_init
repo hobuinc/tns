@@ -55,6 +55,7 @@ then
 fi
 
 cp -r "../src/." "$DOCKER_DIR/handlers/"
+cp -r "../src/." "$DOCKER_DIR/handlers/src/"
 echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
 docker buildx build --platform linux/${ARCH} \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \

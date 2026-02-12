@@ -186,7 +186,7 @@ def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
         delete_if_found(aoi, config)
 
         # create new db entries for aoi-polygon combo
-        part_keys = cover_shape_h3(geojson_dict, 3)
+        part_keys = list(set(cover_shape_h3(geojson_dict, 3)))
         aoi_list = [aoi for s in part_keys]
         keys = zip(part_keys, aoi_list)
 
@@ -281,7 +281,7 @@ def apply_compare(sqs_event, config):
             for dd_batched in batched(deduped, MAX_H3_IDS_SQL):
                 statement = (
                     f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                    f"WHERE h3_id IN {dd_batched}"
+                    f'WHERE "h3_id" IN {list(dd_batched)}'
                 )
                 res = config.dynamo.execute_statement(Statement=statement)
                 for aoi in res["Items"]:

@@ -3,7 +3,7 @@ import boto3
 import polars_st as st
 from time import sleep
 from math import ceil
-from shapely import from_geojson
+from shapely import from_wkb
 from uuid import uuid4
 
 from db_lambda import get_entries_by_aoi
@@ -173,7 +173,7 @@ def test_comp(tf_output, pk_and_model, geom, db_fill, cleanup):
 
     clear_sqs(sqs_out, region)
     aoi_name = f"{pk_and_model}_0"
-    geom_polygon = from_geojson(geom)
+    geom_polygon = from_wkb(geom)
     put_polygon("compare", tf_output, geom_polygon, aoi_name)
     messages = sqs_listen(sqs_out, region)
     cleanup.append(aoi_name)
@@ -202,7 +202,7 @@ def test_add(tf_output, pk_and_model, geom, h3_indices, cleanup):
 
     clear_sqs(sqs_out, region)
     cleanup.append(pk_and_model)
-    add_geom = from_geojson(geom)
+    add_geom = from_wkb(geom)
     put_polygon("add", tf_output, add_geom, pk_and_model)
 
     messages = sqs_listen(sqs_out, region)
@@ -248,13 +248,13 @@ def test_update(
     cleanup.append(aoi_name)
 
     og_items = get_entries_by_aoi(aoi_name, config)
-    og_h3 = [a["h3_id"]["S"] for a in og_items["Items"]]
+    og_h3 = [a["h3_id"]["S"] for a in og_items]
     assert len(og_h3) == 3
     for oh in og_h3:
         assert oh in h3_indices
 
     # update
-    geom_polygon = from_geojson(update_geom)
+    geom_polygon = from_wkb(update_geom)
     aoi_name = f"{pk_and_model}_0"
     put_polygon("add", tf_output, geom_polygon, aoi_name)
     messages = sqs_listen(sqs_out, region)
@@ -290,12 +290,12 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices, config):
     aoi_id = f'{pk_and_model}_0'
 
     og_items = get_entries_by_aoi(aoi_id, config)
-    assert og_items["Count"] == 3
-    for i in og_items["Items"]:
+    assert len(og_items) == 3
+    for i in og_items:
         assert i["pk_and_model"]["S"] == aoi_id
         assert i["h3_id"]["S"] in h3_indices
 
-    geom_delete = from_geojson(geom)
+    geom_delete = from_wkb(geom)
     put_polygon("delete", tf_output, geom_delete, aoi_id)
     messages = sqs_listen(sqs_out, region)
     for msg in messages:
@@ -304,8 +304,7 @@ def test_delete(tf_output, db_fill, geom, pk_and_model, h3_indices, config):
         assert message_str == f"AOI: {aoi_id} deleted"
 
     deleted_items = get_entries_by_aoi(aoi_id, config)
-    assert deleted_items["Count"] == 0
-    assert len(deleted_items["Items"]) == 0
+    assert len(deleted_items) == 0
 
     # should be no messages left in the input queue
     sleep(30)  # the visibility timeout we have to wait out to be sure

@@ -2,6 +2,7 @@ import json
 import h3
 import os
 import boto3
+import gzip
 from osgeo import gdal, ogr
 
 import traceback
@@ -214,7 +215,7 @@ def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
                         "Item": {
                             "h3_id": {"S": pk},
                             "pk_and_model": {"S": aoi},
-                            "polygon": {"B": wkb},
+                            "polygon": {"B": gzip.compress(wkb)},
                         }
                     }
                 }
@@ -283,8 +284,6 @@ def apply_compare(sqs_event, config):
                 geometry = feature.geometry()
                 if geometry is not None:
                     polygon_str = feature.geometry().ExportToJson()
-                    # TODO double check this needs to be a polygon
-                    # polygon = from_geojson(polygon_str)
                     h3_ids = h3_ids + cover_shape_h3(
                         json.loads(polygon_str), H3_RESOLUTION
                     )
@@ -300,12 +299,12 @@ def apply_compare(sqs_event, config):
                 )
                 res = config.dynamo.execute_statement(Statement=statement)
                 for aoi in res["Items"]:
-                    ogr_geom = ogr.CreateGeometryFromWkb(aoi["polygon"]["B"])
+                    wkb = gzip.decompress(aoi["polygon"]["B"])
+                    ogr_geom = ogr.CreateGeometryFromWkb(wkb)
                     aoi_poly_map[aoi["pk_and_model"]["S"]] = ogr_geom
 
             # create ogr geometry from polygons
             for aoi_pk, geom in aoi_poly_map.items():
-                # TODO check if gdal takes reference to this
                 # if so, use gdal Clone
                 layer.SetSpatialFilter(geom)
                 tile_pks = [feature.pk_and_model for feature in layer]

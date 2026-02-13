@@ -5,9 +5,9 @@ import json
 import boto3
 from pathlib import Path
 from time import sleep
-from shapely import Polygon, geometry, bounds, box, from_geojson
+import gzip
+from shapely import Polygon, from_geojson
 
-import pandas as pd
 import polars_st as st
 
 from db_lambda import delete_if_found, CloudConfig
@@ -421,7 +421,7 @@ def db_fill(tf_output, pk_and_model, h3_indices, geom, updated_h3_indices, clean
                     "Item": {
                         "h3_id": {"S": pk},
                         "pk_and_model": {"S": aoi_name},
-                        "polygon": {"B": geom},
+                        "polygon": {"B": gzip.compress(geom)},
                     }
                 }
             }

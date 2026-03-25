@@ -7,9 +7,6 @@ import traceback
 
 from uuid import uuid4, UUID
 
-H3_RESOLUTION = 3
-MAX_H3_IDS_SQL = 50
-SNS_BATCH_LIMIT = 10
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
 DDB_PATH = "/tmp/.duckdb"
@@ -203,5 +200,4 @@ def handler(event: dict[str, str], context):
             fail_msg = get_fail_res(fail_name, data_paths, exc_str)
             config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
             raise e
-
 

@@ -66,7 +66,7 @@ resource aws_iam_role_policy lambda_policy {
                     "logs:CreateLogStream",
                     "logs:PutLogEvents"
                 ]
-                Resource: "*"
+                Resource = "*"
             },
             {
                 Sid = "GetS3Object"

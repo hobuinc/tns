@@ -8,17 +8,18 @@ from math import ceil
 import polars_st as st
 
 from conftest import put_parquet, clear_sqs
-from test_lambdas import clear_sqs
+from db_lambda import CloudConfig
 
-def put_polygon(tf_output, polygon, pk_and_model):
-    gdf = st.GeoDataFrame(
-        data={"pk_and_model": [pk_and_model], "geometry": [polygon.wkb]},
-        strict=True,
-        infer_schema_length=True,
-        geometry_format="wkb",
-    )
 
-    put_parquet(tf_output, gdf)
+# def put_polygon(bucket_name, polygon, pk_and_model):
+#     gdf = st.GeoDataFrame(
+#         data={"pk_and_model": [pk_and_model], "geometry": [polygon.wkb]},
+#         strict=True,
+#         infer_schema_length=True,
+#         geometry_format="wkb",
+#     )
+
+#     put_parquet(bucket_name, gdf)
 
 
 def delete_sqs_message(e, sqs_arn, region):
@@ -89,25 +90,29 @@ def sqs_listen(sqs_arn, region, retries=5):
     return messages
 
 
-def test_stress(config, tf_output, big_aoi_fill, big_states_tiles):
+def test_stress(
+    config: CloudConfig,
+    bucket_name: str,
+    region: str,
+    sqs_out: str,
+    sqs_in: str,
+    big_aoi_fill: None,
+    big_states_tiles: st.GeoDataFrame,
+):
 
-    region = tf_output["aws_region"]
-    comp_sqs_out = tf_output["sqs_out"]
-    comp_sqs_in = tf_output["sqs_in"]
-
-    cloudwatch_client = boto3.client('cloudwatch', region_name=config.region)
+    cloudwatch_client = boto3.client("cloudwatch", region_name=config.region)
     lambda_start_time = datetime.datetime.now(datetime.timezone.utc)
 
     # clear potential previous run data
-    clear_sqs(comp_sqs_out, region)
-    clear_sqs(comp_sqs_in, region)
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
 
     tile_count = 10**5
     batch_size = 1000
     count = ceil(tile_count / batch_size)
     print(f"creating {count} files.")
     for n in range(count):
-        put_parquet(tf_output, big_states_tiles, n)
+        put_parquet(bucket_name, big_states_tiles, n)
 
     # figure out when lambdas are done creating things
     # arbitrary
@@ -118,66 +123,63 @@ def test_stress(config, tf_output, big_aoi_fill, big_states_tiles):
         end_time = datetime.datetime.now(datetime.timezone.utc)
         start_time = end_time - datetime.timedelta(seconds=30)
         res = cloudwatch_client.get_metric_statistics(
-            Namespace='AWS/SQS',
-            MetricName='ApproximateNumberOfMessagesVisible',
-            Dimensions=[{'Name': 'QueueName', 'Value': 'tns_compare_sqs_output'}],
+            Namespace="AWS/SQS",
+            MetricName="ApproximateNumberOfMessagesVisible",
+            Dimensions=[
+                {"Name": "QueueName", "Value": "tns_compare_sqs_output"}
+            ],
             StartTime=start_time,
             EndTime=end_time,
             Period=1,
-            Statistics=['Sum']
+            Statistics=["Sum"],
         )
-        if not res['Datapoints']:
+        if not res["Datapoints"]:
             if prev_empty:
                 break
             prev_empty = 1
             sleep(30)
             continue
-        df = pd.DataFrame(data=res['Datapoints'])
+        df = pd.DataFrame(data=res["Datapoints"])
         cur_vis = df[df.Timestamp == df.Timestamp.max()].iloc[0].Sum.item()
         if cur_vis == prev_vis and prev_vis != 0:
             break
         sleep(30)
 
     lambda_end_time = datetime.datetime.now(datetime.timezone.utc)
-    print('Start Time:', lambda_start_time)
-    print('End Time:', lambda_end_time)
+    print("Start Time:", lambda_start_time)
+    print("End Time:", lambda_end_time)
     total_time = (lambda_end_time - lambda_start_time).total_seconds()
-    print('Total Time: ', total_time)
+    print("Total Time: ", total_time)
 
     # figure out stats on lambdas that were run
     # Errors:
     res = cloudwatch_client.get_metric_statistics(
-        Namespace='AWS/Lambda',
-        MetricName='Errors',
-        Dimensions=[{'Name': 'FunctionName', 'Value': 'tns_comp_lambda'}],
+        Namespace="AWS/Lambda",
+        MetricName="Errors",
+        Dimensions=[{"Name": "FunctionName", "Value": "tns_comp_lambda"}],
         StartTime=lambda_start_time,
         EndTime=lambda_end_time,
         Period=60,
-        Statistics=['Sum']
+        Statistics=["Sum"],
     )
-    assert not any([s['Sum'] for s in res['Datapoints']])
+    assert not any([s["Sum"] for s in res["Datapoints"]])
 
     # Average Durations
     res = cloudwatch_client.get_metric_statistics(
-        Namespace='AWS/Lambda',
-        MetricName='Duration',
-        Dimensions=[{'Name': 'FunctionName', 'Value': 'tns_comp_lambda'}],
+        Namespace="AWS/Lambda",
+        MetricName="Duration",
+        Dimensions=[{"Name": "FunctionName", "Value": "tns_comp_lambda"}],
         StartTime=lambda_start_time,
         EndTime=lambda_end_time,
         Period=60,
-        Statistics=['Average']
+        Statistics=["Average"],
     )
-    print('Average times: ', [s['Average'] for s in res['Datapoints']])
-
-
-
-
-
+    print("Average times: ", [s["Average"] for s in res["Datapoints"]])
 
     msg_count = 0
     failed = []
     while msg_count < count * 50:
-        messages = sqs_listen(comp_sqs_out, region, retries=0)
+        messages = sqs_listen(sqs_out, region, retries=0)
         for msg in messages:
             body = json.loads(msg["Body"])
 
@@ -187,25 +189,28 @@ def test_stress(config, tf_output, big_aoi_fill, big_states_tiles):
             if status == "failed":
                 failed.append(attrs)
 
-            delete_sqs_message(msg, comp_sqs_out, region)
             msg_count += 1
     assert not failed
 
 
-def test_lambda(tf_output, states_tiles, states_aois, aoi_fill, config):
-    region = tf_output["aws_region"]
-    sqs_out = tf_output["sqs_out"]
-    sqs_in = tf_output["sqs_in"]
-    bucket = tf_output["s3_bucket_name"]
-
+def test_lambda(
+    region: str,
+    sqs_out: str,
+    sqs_in: str,
+    bucket_name: str,
+    states_tiles: st.GeoDataFrame,
+    states_aois: st.GeoDataFrame,
+    aoi_fill: None,
+    config: CloudConfig,
+):
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
-    filepath = f"s3://{bucket}/compare/geom.parquet"
+    filepath = f"s3://{bucket_name}/compare/geom.parquet"
     states = states_aois.to_pandas().pk_and_model.to_list()
 
-    put_parquet(tf_output, states_tiles)
+    put_parquet(bucket_name, states_tiles)
 
     messages = sqs_listen(sqs_out, region)
     assert len(messages) == 1
@@ -232,5 +237,3 @@ def test_lambda(tf_output, states_tiles, states_aois, aoi_fill, config):
     s3_aois = s3_info.pl().get_column("aois").to_list()
     assert len(s3_aois) == len(states)
     assert set(s3_aois) == set(states)
-
-    delete_sqs_message(m, sqs_out, region)

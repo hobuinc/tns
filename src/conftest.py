@@ -1,6 +1,6 @@
 import subprocess
 import os
-from typing import Generator, TypeVar, Generic
+from typing import Generator, TypeVar
 import pytest
 import json
 import boto3
@@ -53,6 +53,7 @@ def get_message(
         QueueUrl=queue_url,
         MaxNumberOfMessages=min(num_messages, 10),
         MessageSystemAttributeNames=["All"],
+        WaitTimeSeconds=5
     )
     try:
         messages = message["Messages"]

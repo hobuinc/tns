@@ -9,3 +9,5 @@ dependencies:
   - pyarrow
   - gdal
   - libgdal-arrow-parquet
+  - duckdb
+  - polars

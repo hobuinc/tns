@@ -1,9 +1,12 @@
 import os
 import boto3
 import json
+import shutil
+from uuid import uuid4
+import time
+import pytest
 
-from db_lambda import db_add_handler, db_comp_handler, db_delete_handler
-from db_lambda import get_entries_by_aoi
+from db_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
 
 
 def clear_sqs(sqs_arn, region):
@@ -16,87 +19,118 @@ def clear_sqs(sqs_arn, region):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=10,
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
             for m in messages:
                 receipt_handle = m["ReceiptHandle"]
-                sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+                sqs.delete_message(
+                    QueueUrl=queue_url, ReceiptHandle=receipt_handle
+                )
         else:
             break
     return messages
 
 
-def test_comp(tf_output, comp_event, db_fill):
+def test_big(tf_output, big_event, big_aoi_fill):
     os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["db_compare_sns_out"]
-    os.environ["DB_TABLE_NAME"] = tf_output["table_name"]
-    print(tf_output["db_compare_sns_out"])
+    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
 
-    aois = db_comp_handler(comp_event, None)
-    assert len(aois) == 1
+    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+
+    shutil.rmtree(EXT_PATH)
+    os.remove(DDB_PATH)
+
+    time1 = time.time()
+    aois = handler(big_event, None)
+    res_time = time.time() - time1
+    assert res_time < 500
+    assert len(aois)
     for aoi_res in aois:
-        attrs = aoi_res['MessageAttributes']
-        tiles = json.loads(attrs['tiles']['StringValue'])
-        assert len(tiles) == 1000
+        attrs = aoi_res["MessageAttributes"]
 
-    clear_sqs(tf_output["db_compare_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_compare_sqs_in"], tf_output["aws_region"])
+        status = attrs["status"]["StringValue"]
+        assert status == "succeeded", json.dumps(attrs["error"])
 
+    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
 
-def test_add(tf_output, add_event, pk_and_model, h3_indices, config):
-    db_add_handler(add_event, None)
-    aoi_name = f'{pk_and_model}_0'
-
-    added_items = get_entries_by_aoi(aoi_name, config)
-    assert added_items["Count"] == 3
-    for i in added_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
-    clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
+    os.remove(DDB_PATH)
+    shutil.rmtree(EXT_PATH)
 
 
-def test_update(
-    tf_output,
-    db_fill,
-    update_event,
-    pk_and_model,
-    updated_h3_indices,
-    h3_indices,
-    config,
-):
-    aoi_name = f'{pk_and_model}_0'
-    og_items = get_entries_by_aoi(aoi_name, config)
-    for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
+def test_handler(tf_output, event, aoi_fill, config):
+    os.environ["AWS_REGION"] = tf_output["aws_region"]
+    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
 
-    # update
-    db_add_handler(update_event, None)
+    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
 
-    updated_items = get_entries_by_aoi(aoi_name, config)
-    assert updated_items["Count"] == 2
-    for i in updated_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in updated_h3_indices
-    clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
+    aoi_res = handler(event, None)
+    assert len(aoi_res) == 1
+
+    aoi_res = aoi_res[0]
+    attrs = aoi_res["MessageAttributes"]
+    if "error" in attrs.keys():
+        print(f"Error in messages: {attrs['error']['StringValue']}")
+
+    aois = json.loads(attrs["aoi_list"]["StringValue"])
+    assert len(aois) == 50
+    source_files = json.loads(attrs["source_files"]["StringValue"])
+    assert len(source_files) == 1
+    assert source_files[0] == "s3://tns-bucket-premade/compare/geom.parquet"
+    s3_path = attrs["s3_output_path"]["StringValue"]
+
+    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
+    s3_aois = s3_info.pl().get_column("aois").to_list()
+    assert len(aois) == len(s3_aois)
+    assert set(s3_aois) == set(aois)
+
+    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
 
 
-def test_delete(tf_output, db_fill, delete_event, pk_and_model, h3_indices, config):
-    aoi_name = f'{pk_and_model}_0'
-    og_items = get_entries_by_aoi(aoi_name, config)
-    assert og_items["Count"] == 3
-    for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
+def test_pass_res():
+    paths = ["s3://tns-sample-bucket/tns-sample-path/key.parquet"]
 
-    db_delete_handler(delete_event, None)
+    # basic
+    pass_list = ["0123456789" for n in range(15000)]
+    res_passes = get_pass_res(uuid4(), paths, pass_list, paths[0])
+    assert len(res_passes) == 1
 
-    deleted_items = get_entries_by_aoi(aoi_name, config)
-    assert deleted_items["Count"] == 0
-    assert len(deleted_items["Items"]) == 0
-    clear_sqs(tf_output["db_delete_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_delete_sqs_in"], tf_output["aws_region"])
+    # splitting
+    split_list = ["0123456789" for n in range(20000)]
+    res_splits = get_pass_res(uuid4(), paths, split_list, paths[0])
+    assert len(res_splits) == 2
+
+    # test that large values don't return nested results
+    big_list = ["0123456789" for n in range(10**6)]
+    big_splits = get_pass_res(uuid4(), paths, big_list, paths[0])
+    types = [not isinstance(n, list) for n in big_splits]
+    assert all(types)
+
+def test_failures(sqs_out: str, region: str):
+    def get_attrs(msg):
+        body = json.loads(msg[0]['Body'])
+        return body['MessageAttributes']
+
+    # test bad event creation error catching
+    fake_event = {'Records': ['asdf']}
+    with pytest.raises(Exception) as e1:
+        handler(fake_event, None)
+    assert "string indices must be integers" in str(e1)
+    msg1 = clear_sqs(sqs_out, region)
+    a1 = get_attrs(msg1)
+    assert a1['status']['Value'] == 'failed'
+    assert 'string indices must be integers' in a1['error']['Value']
+
+    # test cloudconfig failure
+    s3_bucket = os.environ.pop('S3_BUCKET')
+    with pytest.raises(Exception) as e2:
+        handler(fake_event, None)
+    os.environ['S3_BUCKET'] = s3_bucket
+    assert "KeyError('S3_BUCKET')" in str(e2)
+    msg2 = clear_sqs(sqs_out, region)
+    a2 = get_attrs(msg2)
+    assert a2['status']['Value'] == 'failed'
+    assert 'KeyError: \'S3_BUCKET\'' in a2['error']['Value']
+
+
+    clear_sqs(sqs_out, region)

@@ -32,7 +32,7 @@ resource aws_s3_bucket_lifecycle_configuration action_lifecycles {
     count = var.modify_bucket ? 1 : 0
     bucket = local.bucket_name
     dynamic rule {
-        for_each = local.actions
+        for_each = ["compare", "intersects"]
         content {
             id = "${rule.key}_${local.bucket_name}_lifecycle"
             status = "Enabled"
@@ -53,11 +53,10 @@ data aws_s3_bucket tns_bucket_premade {
 
 # connect to db_add_sns_in
 data aws_iam_policy_document sns_connect_policy {
-    for_each = aws_sns_topic.sns_in
     statement {
         effect = "Allow"
         actions   = ["SNS:Publish"]
-        resources = [each.value.arn]
+        resources = [aws_sns_topic.sns_in.arn]
         principals {
             type        = "Service"
             identifiers = ["s3.amazonaws.com"]
@@ -72,13 +71,10 @@ data aws_iam_policy_document sns_connect_policy {
 
 resource aws_s3_bucket_notification bucket_notification {
     bucket = local.bucket_name
-    dynamic topic {
-        for_each = local.actions
-        content {
-            topic_arn     = local.sns_in[topic.key].arn
-            events        = ["s3:ObjectCreated:*"]
-            filter_prefix = "${topic.key}/"
-        }
+    topic {
+        topic_arn     = aws_sns_topic.sns_in.arn
+        events        = ["s3:ObjectCreated:*"]
+        filter_prefix = "compare/"
     }
     depends_on = [aws_sns_topic_policy.sns_in_policy]
 }

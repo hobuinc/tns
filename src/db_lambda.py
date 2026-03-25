@@ -1,371 +1,207 @@
 import json
-import h3
 import os
+
 import boto3
-from osgeo import gdal, ogr
-
+import duckdb
 import traceback
-from botocore.config import Config
-from uuid import uuid4
-from itertools import batched
 
-gdal.UseExceptions()
+from uuid import uuid4, UUID
+
 H3_RESOLUTION = 3
 MAX_H3_IDS_SQL = 50
 SNS_BATCH_LIMIT = 10
-
-
-def set_dynamo_config():
-    return Config(
-        retries={"max_attempts": 8, "mode": "adaptive"},
-        tcp_keepalive=True,
-        read_timeout=30,
-        connect_timeout=10,
-    )
+MAX_MSG_BYTES = 2**10 * 256  # 256KB
+EXT_PATH = "/tmp/.duck_extensions"
+DDB_PATH = "/tmp/.duckdb"
 
 
 class CloudConfig:
-    def __init__(self, dynamo_cfg: dict = None):
+    def __init__(self):
         env_keys = os.environ.keys()
-        if "SNS_OUT_ARN" in env_keys:
-            self.sns_out_arn = os.environ["SNS_OUT_ARN"]
-        else:
-            self.sns_out_arn = None
-
-        if "DB_TABLE_NAME" in env_keys:
-            self.table_name = os.environ["DB_TABLE_NAME"]
-        else:
-            self.table_name = None
 
         if "AWS_REGION" in env_keys:
             self.region = os.environ["AWS_REGION"]
         else:
             self.region = "us-west-2"
 
-        if dynamo_cfg is not None:
-            self.dynamo = boto3.client(
-                "dynamodb", region_name=self.region, config=dynamo_cfg
-            )
+        if "SNS_OUT_ARN" in env_keys:
+            self.sns_out_arn = os.environ["SNS_OUT_ARN"]
         else:
-            self.dynamo = boto3.client("dynamodb", region_name=self.region)
+            self.sns_out_arn = None
 
         self.sns = boto3.client("sns", region_name=self.region)
         self.s3 = boto3.client("s3", region_name=self.region)
         self.sqs = boto3.client("sqs", region_name=self.region)
 
+        # failures before this can't be published because required info
+        # isn't available yet
+        try:
+
+            self.bucket = os.environ["S3_BUCKET"]
+
+            con = duckdb.connect(
+                database=DDB_PATH, config={"memory_limit": "2.5GB"}
+            )
+            con.sql(f"SET extension_directory = '{EXT_PATH}';")
+            con.execute("INSTALL httpfs; LOAD httpfs")
+            con.execute("INSTALL spatial; LOAD spatial")
+            con.execute("INSTALL aws; LOAD aws")
+            ex_str = f"""
+                CREATE SECRET (
+                    TYPE S3,
+                    REGION '{self.region}',
+                    PROVIDER CREDENTIAL_CHAIN)
+            """
+            # catch possibility of .duckdb file already made
+            try:
+                con.execute(ex_str)
+            except duckdb.InvalidInputException:
+                print("Using previously made duckdb files.")
+
+            self.con = con
+            self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
+        except Exception as e:
+            fail_tb = traceback.format_exc()
+            fail_msg = get_fail_res(uuid4(), [], fail_tb)
+            self.sns.publish(TopicArn=self.sns_out_arn, **fail_msg)
+            raise e
+
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.con.close()
+
 
 def delete_sqs_message(e, config: CloudConfig):
-    print("deleting from this event", e)
     source_arn = e["eventSourceARN"]
-    print("source_arn:", source_arn)
     queue_name = source_arn.split(":")[-1]
-    print("queue name:", queue_name)
     queue_url = config.sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
     receipt_handle = e["receiptHandle"]
-    return config.sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+    return config.sqs.delete_message(
+        QueueUrl=queue_url, ReceiptHandle=receipt_handle
+    )
 
 
-def get_gdal_layers(sqs_event):
-    datasets = []
-    filenames = []
+def get_data_paths(sqs_event):
     body = json.loads(sqs_event["body"])
     message = json.loads(body["Message"])
     # skip TestEvent
+    paths = []
     if "Event" not in message or message["Event"] != "s3:TestEvent":
         for sns_event in message["Records"]:
             s3_info = sns_event["s3"]
             bucket = s3_info["bucket"]["name"]
             key = s3_info["object"]["key"]
-            vsis_path = f"/vsis3/{bucket}/{key}"
-
-            dataset = gdal.OpenEx(vsis_path)
-
-            datasets.append(dataset)
-            filenames.append(vsis_path)
-
-    return zip(datasets, filenames)
+            path = f"s3://{bucket}/{key}"
+            paths.append(path)
+    return paths
 
 
-def cover_shape_h3(geojson_dict, resolution: int):
-    """
-    Return the set of H3 cells at the specified resolution which completely
-    cover the input shape.
-    """
-
-    # h3 automatically handles Polygon and Multipolygon
-    h3_shape = h3.geo_to_h3shape(geojson_dict)
-    # get h3 indices
-    cells = h3.polygon_to_cells_experimental(h3_shape, resolution, "overlap")
-
-    return cells
-
-
-def get_entries_by_aoi_test_handler(aoi: str):
-    config = CloudConfig()
-    return get_entries_by_aoi(aoi, config)
-
-
-def get_entries_by_aoi(aoi: str, config: CloudConfig):
-    """Scan Dynamo for entries with a specific AOI key."""
-    a = config.dynamo.query(
-        TableName=config.table_name,
-        IndexName="pk_and_model",
-        KeyConditionExpression="pk_and_model = :pk_and_model",
-        ExpressionAttributeValues={
-            ":pk_and_model": {"S": aoi},
+def get_pass_res(
+    name: UUID, dpaths: list[str], aois: list[str], output_path: str
+):
+    attrs = {
+        "source_files": {
+            "DataType": "String",
+            "StringValue": json.dumps(dpaths),
         },
+        "aoi_list": {
+            "DataType": "String",
+            "StringValue": json.dumps(aois),
+        },
+        "s3_output_path": {"DataType": "String", "StringValue": output_path},
+        "status": {"DataType": "String", "StringValue": "succeeded"},
+    }
+    message = f"{name}"
+
+    res = {
+        "MessageAttributes": attrs,
+        "Message": message,
+        "MessageGroupId": "compare",
+    }
+    if json.dumps(res).encode().__sizeof__() > MAX_MSG_BYTES:
+        split = int(len(aois) / 2)
+        res1 = get_pass_res(name, dpaths, aois[:split], output_path)
+        res2 = get_pass_res(name, dpaths, aois[split:], output_path)
+        return [*res1, *res2]
+    return [res]
+
+
+def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
+    res = {
+        "MessageAttributes": {
+            "source_files": {
+                "DataType": "String",
+                "StringValue": json.dumps(dpaths),
+            },
+            "status": {"DataType": "String", "StringValue": "failed"},
+            "error": {"DataType": "String", "StringValue": err_str},
+        },
+        "Message": f"{name}",
+        "MessageGroupId": "compare",
+    }
+    return res
+
+
+def apply_compare(datapaths: list[str], config: CloudConfig):
+    name = uuid4()
+    base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
+    full_s3_path = f"s3://{base_s3_path}"
+
+    # create tracking variables
+    sql = f"""
+        SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
+            FROM read_parquet("{config.aois_path}") AS aois
+            JOIN read_parquet({datapaths}) AS tiles
+            ON ST_Intersects(aois.geometry, tiles.geometry)
+            GROUP BY aois.pk_and_model
+    """
+    ddbi = config.con.sql(sql)
+    aoi_list = ddbi.pl().get_column("aois").to_list()
+    config.con.sql(
+        f"COPY ddbi TO '{full_s3_path}' (FORMAT parquet, COMPRESSION zstd)"
     )
-    return a
 
+    return get_pass_res(name, datapaths, aoi_list, full_s3_path)
 
-def delete_if_found(aoi: str, config: CloudConfig | None = None):
-    """Delete entries from dynamo."""
-    if config is None:
-        config = CloudConfig()
-    res = get_entries_by_aoi(aoi, config)
-    if res["Count"] == 0:
-        return
-    for i in res["Items"]:
-        i.pop("polygon")
-        config.dynamo.delete_item(TableName=config.table_name, Key=i)
-
-
-def apply_delete(feature: ogr.Feature, filename: str, config: CloudConfig):
-    try:
-        aoi = feature.pk_and_model
-        delete_if_found(aoi, config)
-
-        publish_res = config.sns.publish(
-            TopicArn=config.sns_out_arn,
-            MessageAttributes={
-                "source_file": {"DataType": "String", "StringValue": filename},
-                "aoi": {"DataType": "String", "StringValue": aoi},
-                "status": {
-                    "DataType": "String",
-                    "StringValue": "succeeded",
-                },
-            },
-            Message=f"AOI: {aoi} deleted",
-        )
-
-        print(f"Successful response: {publish_res}")
-    except Exception as e:
-        publish_res = config.sns.publish(
-            TopicArn=config.sns_out_arn,
-            MessageAttributes={
-                "source_file": {"DataType": "String", "StringValue": filename},
-                "aoi": {"DataType": "String", "StringValue": aoi},
-                "status": {"DataType": "String", "StringValue": "failed"},
-                "error": {"DataType": "String", "StringValue": f"{e.args}"},
-            },
-            Message="Failed to delete aoi {aoi}",
-        )
-        print(f"Error response: {publish_res}")
-
-
-def db_delete_handler(event, context):
-    config = CloudConfig()
-    print("Event:", json.dumps(event))
-    events = event["Records"]
-    for sqs_event in events:
-        datasets = get_gdal_layers(sqs_event)
-        for ds, filename in datasets:
-            layer = ds.GetLayer()
-            for feature in layer:
-                apply_delete(feature, filename, config)
-        delete_sqs_message(sqs_event, config)
-
-
-def apply_add(feature: ogr.Feature, filename: str, config: CloudConfig):
-    try:
-        geometry = feature.geometry()
-        geojson_str = geometry.ExportToJson()
-        geojson_dict = json.loads(geojson_str)
-        aoi = feature.pk_and_model
-        print("polygon_str", geojson_str)
-        delete_if_found(aoi, config)
-
-        # create new db entries for aoi-polygon combo
-        part_keys = list(set(cover_shape_h3(geojson_dict, 3)))
-        aoi_list = [aoi for s in part_keys]
-        keys = zip(part_keys, aoi_list)
-
-        # max length of items in a dynamo batch write call
-        for batch in batched(keys, 25):
-            request = {f"{config.table_name}": []}
-            for pk, aoi in batch:
-                request_item = {
-                    "PutRequest": {
-                        "Item": {
-                            "h3_id": {"S": pk},
-                            "pk_and_model": {"S": aoi},
-                            "polygon": {"S": geojson_str},
-                        }
-                    }
-                }
-                request[f"{config.table_name}"].append(request_item)
-            config.dynamo.batch_write_item(RequestItems=request)
-
-        publish_res = config.sns.publish(
-            TopicArn=config.sns_out_arn,
-            MessageAttributes={
-                "aoi": {"DataType": "String", "StringValue": aoi},
-                "source_file": {"DataType": "String", "StringValue": filename},
-                "h3_indices": {
-                    "DataType": "String.Array",
-                    "StringValue": json.dumps(part_keys),
-                },
-                "status": {"DataType": "String", "StringValue": "succeeded"},
-            },
-            Message=f"AOI: {aoi} added",
-        )
-        print(f"Added AOI response: {publish_res}")
-    except Exception as e:
-        traceback.print_exc()
-        publish_res = config.sns.publish(
-            TopicArn=config.sns_out_arn,
-            MessageAttributes={
-                "aoi": {"DataType": "String", "StringValue": aoi},
-                "source_file": {"DataType": "String", "StringValue": filename},
-                "status": {"DataType": "String", "StringValue": "failed"},
-                "error": {"DataType": "String", "StringValue": f"{e.args}"},
-            },
-            Message="Error.",
-        )
-        print(f"Error response: {publish_res}")
-
-
-def db_add_handler(event, context):
-    config = CloudConfig()
-    print("Event:", json.dumps(event))
-    events = event["Records"]
-    for sqs_event in events:
-        datasets = get_gdal_layers(sqs_event)
-        for ds, filename in datasets:
-            layer = ds.GetLayer()
-            for feature in layer:
-                apply_add(feature, filename, config)
-        delete_sqs_message(sqs_event, config)
-
-
-def apply_compare(sqs_event, config):
-    # grab data fraom s3
-    datasets = get_gdal_layers(sqs_event)
-
-    # iterate gdal dataset layers
-    # create list of h3_ids from geometry
-    # use h3_ids to query dynamo
-    # filter layers by polygons produced from dynamo
-    sns_messages = []
-    for ds, filename in datasets:
-        # iterate tiles and find h3 cover
-        try:
-            # create tracking variables
-            aois_affected_map: dict[str, list] = {}
-            h3_ids = []
-            layer = ds.GetLayer()
-            for feature in layer:
-                geometry = feature.geometry()
-                if geometry is not None:
-                    polygon_str = feature.geometry().ExportToJson()
-                    # TODO double check this needs to be a polygon
-                    # polygon = from_geojson(polygon_str)
-                    h3_ids = h3_ids + cover_shape_h3(
-                        json.loads(polygon_str), H3_RESOLUTION
-                    )
-            deduped = list(set(h3_ids))
-
-            # query h3 index
-            aoi_poly_map = {}
-            # limit of 50 in IN method
-            for dd_batched in batched(deduped, MAX_H3_IDS_SQL):
-                statement = (
-                    f'SELECT * FROM "{config.table_name}"."h3_idx" '
-                    f'WHERE "h3_id" IN {list(dd_batched)}'
-                )
-                res = config.dynamo.execute_statement(Statement=statement)
-                for aoi in res["Items"]:
-                    ogr_geom = ogr.CreateGeometryFromJson(aoi["polygon"]["S"])
-                    aoi_poly_map[aoi["pk_and_model"]["S"]] = ogr_geom
-
-            # create ogr geometry from polygons
-            for aoi_pk, geom in aoi_poly_map.items():
-                # TODO check if gdal takes reference to this
-                # if so, use gdal Clone
-                layer.SetSpatialFilter(geom)
-                tile_pks = [feature.pk_and_model for feature in layer]
-                if aoi_pk in aois_affected_map:
-                    aois_affected_map[aoi_pk] = aois_affected_map[aoi_pk] + tile_pks
-                else:
-                    aois_affected_map[aoi_pk] = tile_pks
-
-            if aois_affected_map:
-                print(f"AOIs found. Pushing to SNS Topic {config.sns_out_arn}.")
-            # maximum number of tiles that can be implicated here is 10k in the end
-            # should not exceed the sqs limits
-            for aoi_pk, tile_list in aois_affected_map.items():
-                name = f"{aoi_pk}-{uuid4()}"
-                sns_request_json = {
-                    "Id": name,
-                    "MessageAttributes": {
-                        "source_file": {"DataType": "String", "StringValue": filename},
-                        "aoi_id": {
-                            "DataType": "String",
-                            "StringValue": aoi_pk,
-                        },
-                        "tiles": {
-                            "DataType": "String.Array",
-                            "StringValue": json.dumps(tile_list),
-                        },
-                        "status": {"DataType": "String", "StringValue": "succeeded"},
-                    },
-                    "Message": name,
-                    "MessageGroupId": "compare",
-                }
-                sns_messages.append(sns_request_json)
-        except Exception as e:
-            name = uuid4()
-            sns_request_json = {
-                "Id": f"{name}",
-                "MessageAttributes": {
-                    "source_file": {"DataType": "String", "StringValue": filename},
-                    "status": {"DataType": "String", "StringValue": "failed"},
-                    "error": {"DataType": "String", "StringValue": f"{e.args}"},
-                },
-                "Message": f"{name}",
-                "MessageGroupId": "compare",
-            }
-            sns_messages.append(sns_request_json)
-
-    for batch in batched(sns_messages, SNS_BATCH_LIMIT):
-        resp = config.sns.publish_batch(
-            TopicArn=config.sns_out_arn, PublishBatchRequestEntries=batch
-        )
-        if resp.get("Failed"):
-            raise ValueError(resp)
-        else:
-            print("SNS response:", resp)
-
-    return sns_messages
 
 
 # Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
 # AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
-# TODO may want to change names to clear on aoi/tile pk_and_model attributes,
-# but leaving for now in interest of time.
-def db_comp_handler(event, context):
-    # create configs
-    dynamo_cfg = set_dynamo_config()
-    config = CloudConfig(dynamo_cfg)
+def handler(event: dict[str, str], context):
+    import time
     print("Event:", json.dumps(event))
+    data_paths = []
+    with CloudConfig() as config:
+        try:
+            events = event["Records"]
 
-    events = event["Records"]
-    sns_messages = []
-    for sqs_event in events:
-        sns_messages = sns_messages + apply_compare(sqs_event, config)
-        delete_sqs_message(sqs_event, config)
+            # collect data paths, delete messages after processing
+            for sqs_event in events:
+                data_paths = data_paths + get_data_paths(sqs_event)
 
-    # return number of tiles which were associated with at least 1 subscription
-    return sns_messages
+            # process data paths together
+            start = time.time()
+            sns_messages = apply_compare(data_paths, config)
+            end = time.time() - start
+            print(f"processing time for {len(data_paths)} files: {end}s")
+            for msg in sns_messages:
+                config.sns.publish(TopicArn=config.sns_out_arn, **msg)
+
+            # delete sqs messages now that we're done
+            for sqs_event in events:
+                delete_sqs_message(sqs_event, config)
+
+            return sns_messages
+        except Exception as e:
+            fail_name = uuid4()
+            exc_str = traceback.format_exc()
+            fail_msg = get_fail_res(fail_name, data_paths, exc_str)
+            config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
+            raise e
+
+

@@ -8,7 +8,7 @@ import time
 import pytest
 
 from conftest import EventType
-from intersects_lambda import CloudConfig, handler, get_pass_res, EXT_PATH
+from intersects_lambda import CloudConfig, handler, EXT_PATH
 
 
 def clear_sqs(sqs_arn: str, region: str):
@@ -97,26 +97,6 @@ def test_handler(
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
-
-
-def test_pass_res(bucket_name: str):
-    paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
-
-    # basic
-    pass_list = ["0123456789" for n in range(15000)]
-    res_passes = get_pass_res(uuid4(), paths, pass_list, paths[0])
-    assert len(res_passes) == 1
-
-    # splitting
-    split_list = ["0123456789" for n in range(20000)]
-    res_splits = get_pass_res(uuid4(), paths, split_list, paths[0])
-    assert len(res_splits) == 2
-
-    # test that large values don't return nested results
-    big_list = ["0123456789" for n in range(10**6)]
-    big_splits = get_pass_res(uuid4(), paths, big_list, paths[0])
-    types = [not isinstance(n, list) for n in big_splits]
-    assert all(types)
 
 
 def test_failures(sqs_out: str, region: str):

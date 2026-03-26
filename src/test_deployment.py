@@ -8,7 +8,7 @@ from math import ceil
 import polars_st as st
 
 from conftest import put_parquet, clear_sqs
-from db_lambda import CloudConfig
+from intersects_lambda import CloudConfig
 
 
 # def put_polygon(bucket_name, polygon, pk_and_model):
@@ -72,6 +72,7 @@ def sqs_listen(sqs_arn, region, retries=5):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
+            WaitTimeSeconds=5
         )
         if "Messages" in res.keys():
             messages = res["Messages"]

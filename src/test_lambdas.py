@@ -6,7 +6,7 @@ from uuid import uuid4
 import time
 import pytest
 
-from db_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
+from intersects_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
 
 
 def clear_sqs(sqs_arn, region):

@@ -176,8 +176,6 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
 def handler(event: dict[str, str], context):
-    import time
-
     print("Event:", json.dumps(event))
     data_paths = []
     with CloudConfig() as config:
@@ -189,10 +187,7 @@ def handler(event: dict[str, str], context):
                 data_paths = data_paths + get_data_paths(sqs_event)
 
             # process data paths together
-            start = time.time()
             sns_messages = apply_compare(data_paths, config)
-            end = time.time() - start
-            print(f"processing time for {len(data_paths)} files: {end}s")
             for msg in sns_messages:
                 config.sns.publish(TopicArn=config.sns_out_arn, **msg)
 

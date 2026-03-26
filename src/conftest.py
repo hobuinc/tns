@@ -11,7 +11,7 @@ from time import sleep
 import polars_st as st
 from shapely import Polygon
 
-from db_lambda import CloudConfig
+from intersects_lambda import CloudConfig
 
 
 TILES_PER_FILE = 1000

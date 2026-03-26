@@ -11,7 +11,7 @@ resource aws_lambda_function compare_function {
     package_type="Image"
     architectures = ["x86_64"]
     image_config {
-        command = ["tns_lambda.db_lambda.handler"]
+        command = ["tns_lambda.intersects_lambda.handler"]
     }
 
     environment {

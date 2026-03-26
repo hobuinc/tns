@@ -1,8 +1,8 @@
 """AWS Lambda integration layer for the Tile Notification System.
 
 The handler in this module is responsible for turning SQS-wrapped S3 events
-into calls into ``tns_core``, then publishing success or failure messages to
-the configured SNS topic.
+into calls into ``tns_core``, where DuckDB executes the spatial join, and then
+publishing success or failure messages to the configured SNS topic.
 """
 
 from __future__ import annotations

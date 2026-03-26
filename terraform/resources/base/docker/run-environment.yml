@@ -3,7 +3,5 @@ channels:
   - conda-forge
 dependencies:
   - boto3
-  - geopandas
-  - pandas
+  - duckdb
   - pyarrow
-  - shapely

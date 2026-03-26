@@ -8,15 +8,15 @@ When a GeoParquet file is written to the `compare/` prefix in S3:
 
 1. S3 publishes an object-created notification to an SNS topic.
 2. The SNS topic fans that event into an SQS queue.
-3. A Lambda consumes the SQS batch, reads the incoming GeoParquet tile files and the AOI GeoParquet dataset, computes spatial intersections, writes a Parquet result under `intersects/`, and publishes a success or failure message to an output SNS topic.
+3. A Lambda consumes the SQS batch, reads the incoming GeoParquet tile files and the AOI GeoParquet dataset, runs a DuckDB spatial join, writes a Parquet result under `intersects/`, and publishes a success or failure message to an output SNS topic.
 
-The spatial compare logic is implemented in pure Python with GeoPandas and Shapely, which makes it testable locally without live AWS resources.
+The spatial compare logic is implemented with DuckDB's spatial extension, which keeps the runtime and dependency footprint smaller than a GeoPandas/Shapely stack while still allowing local unit coverage.
 
 ## Repository Layout
 
-- `src/tns_core.py`: GeoParquet loading, intersection logic, and result writing.
+- `src/tns_core.py`: DuckDB-backed GeoParquet staging, spatial join logic, and result writing.
 - `src/db_lambda.py`: AWS Lambda handler, event parsing, and SNS publishing.
-- `src/test_intersections.py`: local unit tests for the GeoParquet intersection path using `src/geoms.json`.
+- `src/test_intersections.py`: local unit tests for the DuckDB GeoParquet intersection path using `src/geoms.json`.
 - `terraform/`: AWS infrastructure definitions.
 - `scripts/`: helper scripts for initialization, deployment, teardown, and Docker image builds.
 
@@ -43,7 +43,7 @@ Run the fast local test suite:
 pytest -q
 ```
 
-This covers the GeoParquet intersection logic and Lambda message handling without requiring AWS.
+This covers the DuckDB GeoParquet intersection logic and Lambda message handling without requiring AWS.
 
 Live AWS tests are intentionally opt-in. To enable them, export `TNS_RUN_AWS_TESTS=1` and run the integration tests against deployed infrastructure.
 

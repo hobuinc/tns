@@ -5,9 +5,8 @@ dependencies:
   - python
   - python<3.14
   - boto3
-  - geopandas
+  - duckdb
   - pyarrow
   - pytest
-  - shapely
   - jq
   - terraform

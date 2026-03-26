@@ -3,5 +3,6 @@ build/
 *.tfvars
 *.tfstate
 .terraform/
+.duckdb_extensions/
 **/__pycache__/
 terraform/resources/base/docker/handlers

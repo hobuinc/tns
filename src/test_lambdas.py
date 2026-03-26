@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import write_geometry_parquet
 from db_lambda import (
     AppConfig,
     AppContext,
@@ -73,14 +74,14 @@ def test_get_data_paths_skips_s3_test_event():
 
 
 def test_process_data_paths_returns_success_messages(
-    aois_gdf, tiles_gdf, parquet_dir: Path
+    aoi_rows, tile_rows, parquet_dir: Path
 ):
     """Processing local parquet inputs should return a succeeded result message."""
     aoi_path = parquet_dir / "subs.parquet"
     tile_path = parquet_dir / "tile.parquet"
     output_dir = parquet_dir / "output"
-    aois_gdf.to_parquet(aoi_path)
-    tiles_gdf.to_parquet(tile_path)
+    write_geometry_parquet(aoi_path, aoi_rows)
+    write_geometry_parquet(tile_path, tile_rows)
 
     app_context = AppContext(
         config=AppConfig(

@@ -1,34 +1,41 @@
-"""Unit tests for the local GeoParquet intersection workflow."""
+"""Unit tests for the local DuckDB GeoParquet intersection workflow."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import geopandas as gpd
 import pyarrow.parquet as pq
 
+from conftest import write_geometry_parquet
 from tns_core import (
     FilesystemGeoParquetStore,
-    combine_tile_frames,
+    build_intersection_query,
     compare_geoparquets,
-    intersect_geodataframes,
+    connect_duckdb,
 )
 
 
-def test_intersect_geodataframes_matches_all_states(
-    aois_gdf: gpd.GeoDataFrame, tiles_gdf: gpd.GeoDataFrame
+def test_build_intersection_query_matches_all_states(
+    aoi_rows: list[dict[str, str]], tile_rows: list[dict[str, str]], parquet_dir: Path
 ):
     """Every AOI should intersect the tile derived from the same geometry."""
-    result = intersect_geodataframes(aois_gdf, tiles_gdf)
-    assert len(result.index) == len(aois_gdf.index)
-    assert set(result["aois"]) == set(aois_gdf["pk_and_model"])
-    tile_lookup = dict(zip(result["aois"], result["tiles"]))
-    for index, aoi_name in enumerate(aois_gdf["pk_and_model"]):
-        assert f"raster_{index}" in tile_lookup[aoi_name]
+    aoi_path = parquet_dir / "subscriptions.parquet"
+    tile_path = parquet_dir / "tiles.parquet"
+    write_geometry_parquet(aoi_path, aoi_rows)
+    write_geometry_parquet(tile_path, tile_rows)
+
+    with connect_duckdb() as connection:
+        query = build_intersection_query(str(aoi_path), [str(tile_path)])
+        rows = connection.execute(query).fetchall()
+
+    assert len(rows) == len(aoi_rows)
+    lookup = {row[0]: row[1] for row in rows}
+    for index, row in enumerate(aoi_rows):
+        assert f"raster_{index}" in lookup[row["pk_and_model"]]
 
 
 def test_compare_geoparquets_writes_output_parquet(
-    aois_gdf: gpd.GeoDataFrame, tiles_gdf: gpd.GeoDataFrame, parquet_dir: Path
+    aoi_rows: list[dict[str, str]], tile_rows: list[dict[str, str]], parquet_dir: Path
 ):
     """Full parquet comparison should write a result table with all AOIs."""
     store = FilesystemGeoParquetStore()
@@ -36,8 +43,8 @@ def test_compare_geoparquets_writes_output_parquet(
     tile_path = parquet_dir / "tiles.parquet"
     output_path = parquet_dir / "intersects" / "result.parquet"
 
-    aois_gdf.to_parquet(aoi_path)
-    tiles_gdf.to_parquet(tile_path)
+    write_geometry_parquet(aoi_path, aoi_rows)
+    write_geometry_parquet(tile_path, tile_rows)
 
     artifacts = compare_geoparquets(
         aoi_uri=str(aoi_path),
@@ -51,22 +58,25 @@ def test_compare_geoparquets_writes_output_parquet(
 
     result_table = pq.read_table(output_path)
     assert result_table.num_rows == 50
-    assert set(result_table.column("aois").to_pylist()) == set(
-        aois_gdf["pk_and_model"]
-    )
+    assert set(result_table.column("aois").to_pylist()) == {
+        row["pk_and_model"] for row in aoi_rows
+    }
 
 
-def test_combine_tile_frames_accepts_multiple_geoparquets(
-    split_tiles_gdf: gpd.GeoDataFrame, parquet_dir: Path
+def test_multiple_tile_parquets_are_joined_together(
+    split_tile_rows: list[dict[str, str]], parquet_dir: Path
 ):
-    """Tile inputs from multiple parquet files should merge into one frame."""
-    store = FilesystemGeoParquetStore()
+    """Tile inputs from multiple parquet files should join in one query."""
     first = parquet_dir / "tiles-1.parquet"
     second = parquet_dir / "tiles-2.parquet"
+    aoi_path = parquet_dir / "subscriptions.parquet"
 
-    split_tiles_gdf.iloc[:5].to_parquet(first)
-    split_tiles_gdf.iloc[5:].to_parquet(second)
+    write_geometry_parquet(aoi_path, split_tile_rows)
+    write_geometry_parquet(first, split_tile_rows[:5])
+    write_geometry_parquet(second, split_tile_rows[5:])
 
-    combined = combine_tile_frames([str(first), str(second)], store)
-    assert len(combined.index) == len(split_tiles_gdf.index)
-    assert set(combined["pk_and_model"]) == set(split_tiles_gdf["pk_and_model"])
+    with connect_duckdb() as connection:
+        query = build_intersection_query(str(aoi_path), [str(first), str(second)])
+        rows = connection.execute(query).fetchall()
+
+    assert len(rows) == len(split_tile_rows)

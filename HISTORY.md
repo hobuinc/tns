@@ -16,29 +16,29 @@ This document records the changes made during the `codex-refactor` branch work, 
 
 The original implementation mixed AWS client creation, DuckDB extension bootstrapping, S3 path handling, SQL execution, and message publishing in one file. That made the most important logic hard to test and hard to reason about. The refactor separates concerns:
 
-- `tns_core.py` owns GeoParquet reading, validation, CRS normalization, intersection logic, and output writing.
+- `tns_core.py` owns GeoParquet staging, validation, DuckDB spatial joins, and output writing.
 - `db_lambda.py` owns environment config, event parsing, and SNS publishing.
 
 This split makes the spatial workflow locally testable without AWS and makes failures easier to isolate.
 
-## 2. Removed the DuckDB-centric compare path
+## 2. Returned to a DuckDB-centric compare path
 
 ### What changed
 
-- Replaced the old DuckDB spatial join flow with GeoPandas and Shapely logic.
-- Removed the runtime dependency on DuckDB in the Lambda code.
-- Switched the intersection implementation to `STRtree`-based matching in [src/tns_core.py](/Users/hobu/dev/git/tns/src/tns_core.py).
+- Implemented the core compare path with DuckDB and its spatial extension in [src/tns_core.py](/Users/hobu/dev/git/tns/src/tns_core.py).
+- Kept the thinner Lambda structure introduced during the refactor.
+- Reworked the local fixtures so test parquet files are generated with DuckDB instead of GeoPandas/Shapely.
 
 ### Why
 
-The old code depended on Lambda-time extension installation and secret setup in `/tmp`, which introduced operational fragility and made failures more likely during bootstrap. A pure Python geospatial path is easier to test, easier to package, and better aligned with the requirement to add repository-local unit tests against the included geometry fixture data.
+After the first refactor pass, the in-memory GeoPandas/Shapely path proved too heavy in both memory use and dependency footprint. Moving the spatial work back into DuckDB keeps the package leaner and aligns better with the project's original execution model, while still preserving the improved modularity and testability from the refactor.
 
 ## 3. Added repository-local unit tests for intersection logic
 
 ### What changed
 
 - Added [src/test_intersections.py](/Users/hobu/dev/git/tns/src/test_intersections.py).
-- Replaced the old infrastructure-heavy fixture setup in [src/conftest.py](/Users/hobu/dev/git/tns/src/conftest.py) with local GeoPandas fixtures based on [src/geoms.json](/Users/hobu/dev/git/tns/src/geoms.json).
+- Replaced the old infrastructure-heavy fixture setup in [src/conftest.py](/Users/hobu/dev/git/tns/src/conftest.py) with local DuckDB-backed parquet fixtures based on [src/geoms.json](/Users/hobu/dev/git/tns/src/geoms.json).
 - Reworked [src/test_lambdas.py](/Users/hobu/dev/git/tns/src/test_lambdas.py) to test event parsing, message sizing, local compare execution, and failure publishing without live AWS.
 - Converted [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py) into an explicit opt-in placeholder for live infrastructure tests.
 
@@ -71,15 +71,15 @@ The previous initialization path could mask the original failure by trying to pu
 
 ### Why
 
-The refactor introduced clearer boundaries, and the docstrings make those boundaries explicit for future maintainers. This improves onboarding and reduces the amount of reverse engineering required to understand how the compare path works.
+The refactor introduced clearer boundaries, and the docstrings make those boundaries explicit for future maintainers. This improves onboarding and reduces the amount of reverse engineering required to understand how the DuckDB compare path works.
 
 ## 6. Updated the development environment
 
 ### What changed
 
 - Updated [environment.yaml](/Users/hobu/dev/git/tns/environment.yaml) to reflect the actual development and test dependencies.
-- Added `pytest` and `shapely` explicitly.
-- Kept the environment focused on the refactored GeoParquet workflow.
+- Added `duckdb` and `pytest` explicitly.
+- Removed the extra GeoPandas/Shapely application dependency weight from the runtime story.
 
 ### Why
 
@@ -126,7 +126,7 @@ These files were artifacts of an older design and no longer contributed to the r
 
 - Updated [terraform/resources/base/docker/Dockerfile](/Users/hobu/dev/git/tns/terraform/resources/base/docker/Dockerfile) to use a pinned Lambda Runtime Interface Emulator release.
 - Removed the stale `config.py` copy step that no longer matched the repository layout.
-- Updated [terraform/resources/base/docker/run-environment.yml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/run-environment.yml) to match the new GeoPandas/Shapely runtime instead of the old DuckDB/H3-focused setup.
+- Updated [terraform/resources/base/docker/run-environment.yml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/run-environment.yml) to match the refactored DuckDB runtime.
 
 ### Why
 

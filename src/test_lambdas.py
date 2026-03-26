@@ -1,136 +1,150 @@
-import os
-import boto3
+"""Tests for Lambda-facing event parsing and message handling."""
+
+from __future__ import annotations
+
 import json
-import shutil
-from uuid import uuid4
-import time
+from dataclasses import dataclass
+from pathlib import Path
+
 import pytest
 
-from db_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
+from db_lambda import (
+    AppConfig,
+    AppContext,
+    MAX_MSG_BYTES,
+    get_data_paths,
+    get_fail_res,
+    get_pass_res,
+    handler,
+    process_data_paths,
+)
+from tns_core import FilesystemGeoParquetStore
 
 
-def clear_sqs(sqs_arn, region):
-    sqs = boto3.client("sqs", region_name=region)
-    queue_name = sqs_arn.split(":")[-1]
-    queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
-    messages = []
-    while not len(messages):
-        res = sqs.receive_message(
-            QueueUrl=queue_url,
-            MessageAttributeNames=["All"],
-            MaxNumberOfMessages=10,
-        )
-        if "Messages" in res.keys():
-            messages = res["Messages"]
-            for m in messages:
-                receipt_handle = m["ReceiptHandle"]
-                sqs.delete_message(
-                    QueueUrl=queue_url, ReceiptHandle=receipt_handle
+@dataclass
+class RecordingPublisher:
+    """Simple SNS publisher stub used to capture published payloads."""
+
+    published: list[dict[str, object]]
+
+    def publish(self, **kwargs):
+        """Record publish calls for later assertions."""
+        self.published.append(kwargs)
+
+
+def build_sqs_event(path: str) -> dict[str, object]:
+    """Build a minimal SQS event payload that wraps an S3 notification."""
+    return {
+        "Records": [
+            {
+                "body": json.dumps(
+                    {
+                        "Message": json.dumps(
+                            {
+                                "Records": [
+                                    {
+                                        "s3": {
+                                            "bucket": {"name": "tns-bucket"},
+                                            "object": {
+                                                "key": path.removeprefix(
+                                                    "s3://tns-bucket/"
+                                                )
+                                            },
+                                        }
+                                    }
+                                ]
+                            }
+                        )
+                    }
                 )
-        else:
-            break
-    return messages
+            }
+        ]
+    }
 
 
-def test_big(tf_output, big_event, big_aoi_fill):
-    os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
-
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
-
-    shutil.rmtree(EXT_PATH)
-    os.remove(DDB_PATH)
-
-    time1 = time.time()
-    aois = handler(big_event, None)
-    res_time = time.time() - time1
-    assert res_time < 500
-    assert len(aois)
-    for aoi_res in aois:
-        attrs = aoi_res["MessageAttributes"]
-
-        status = attrs["status"]["StringValue"]
-        assert status == "succeeded", json.dumps(attrs["error"])
-
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
-
-    os.remove(DDB_PATH)
-    shutil.rmtree(EXT_PATH)
+def test_get_data_paths_skips_s3_test_event():
+    """S3 test events should not produce data paths for processing."""
+    event = {
+        "body": json.dumps(
+            {"Message": json.dumps({"Event": "s3:TestEvent"})}
+        )
+    }
+    assert get_data_paths(event) == []
 
 
-def test_handler(tf_output, event, aoi_fill, config):
-    os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
+def test_process_data_paths_returns_success_messages(
+    aois_gdf, tiles_gdf, parquet_dir: Path
+):
+    """Processing local parquet inputs should return a succeeded result message."""
+    aoi_path = parquet_dir / "subs.parquet"
+    tile_path = parquet_dir / "tile.parquet"
+    output_dir = parquet_dir / "output"
+    aois_gdf.to_parquet(aoi_path)
+    tiles_gdf.to_parquet(tile_path)
 
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+    app_context = AppContext(
+        config=AppConfig(
+            region="us-west-2",
+            bucket="unused",
+            sns_out_arn=None,
+            aoi_key=str(aoi_path),
+            output_prefix=str(output_dir),
+        ),
+        store=FilesystemGeoParquetStore(),
+        sns_client=None,
+    )
 
-    aoi_res = handler(event, None)
-    assert len(aoi_res) == 1
-
-    aoi_res = aoi_res[0]
-    attrs = aoi_res["MessageAttributes"]
-    if "error" in attrs.keys():
-        print(f"Error in messages: {attrs['error']['StringValue']}")
-
-    aois = json.loads(attrs["aoi_list"]["StringValue"])
-    assert len(aois) == 50
-    source_files = json.loads(attrs["source_files"]["StringValue"])
-    assert len(source_files) == 1
-    assert source_files[0] == "s3://tns-bucket-premade/compare/geom.parquet"
-    s3_path = attrs["s3_output_path"]["StringValue"]
-
-    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-    s3_aois = s3_info.pl().get_column("aois").to_list()
-    assert len(aois) == len(s3_aois)
-    assert set(s3_aois) == set(aois)
-
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
-
-
-def test_pass_res():
-    paths = ["s3://tns-sample-bucket/tns-sample-path/key.parquet"]
-
-    # basic
-    pass_list = ["0123456789" for n in range(15000)]
-    res_passes = get_pass_res(uuid4(), paths, pass_list, paths[0])
-    assert len(res_passes) == 1
-
-    # splitting
-    split_list = ["0123456789" for n in range(20000)]
-    res_splits = get_pass_res(uuid4(), paths, split_list, paths[0])
-    assert len(res_splits) == 2
-
-    # test that large values don't return nested results
-    big_list = ["0123456789" for n in range(10**6)]
-    big_splits = get_pass_res(uuid4(), paths, big_list, paths[0])
-    types = [not isinstance(n, list) for n in big_splits]
-    assert all(types)
-
-def test_failures(sqs_out: str, region: str):
-    def get_attrs(msg):
-        body = json.loads(msg[0]['Body'])
-        return body['MessageAttributes']
-
-    # test bad event creation error catching
-    fake_event = {'Records': ['asdf']}
-    with pytest.raises(Exception) as e1:
-        handler(fake_event, None)
-    assert "string indices must be integers" in str(e1)
-    msg1 = clear_sqs(sqs_out, region)
-    a1 = get_attrs(msg1)
-    assert a1['status']['Value'] == 'failed'
-    assert 'string indices must be integers' in a1['error']['Value']
-
-    # test cloudconfig failure
-    s3_bucket = os.environ.pop('S3_BUCKET')
-    with pytest.raises(Exception) as e2:
-        handler(fake_event, None)
-    os.environ['S3_BUCKET'] = s3_bucket
-    assert "KeyError('S3_BUCKET')" in str(e2)
-    msg2 = clear_sqs(sqs_out, region)
-    a2 = get_attrs(msg2)
-    assert a2['status']['Value'] == 'failed'
-    assert 'KeyError: \'S3_BUCKET\'' in a2['error']['Value']
+    messages = process_data_paths([str(tile_path)], app_context)
+    assert len(messages) == 1
+    attrs = messages[0]["MessageAttributes"]
+    assert attrs["status"]["StringValue"] == "succeeded"
+    assert len(json.loads(attrs["aoi_list"]["StringValue"])) == 50
 
 
-    clear_sqs(sqs_out, region)
+def test_get_pass_res_splits_large_payload():
+    """Large AOI lists should be split to stay within SNS payload limits."""
+    paths = ["s3://tns-sample-bucket/compare/key.parquet"]
+    aois = ["0123456789" for _ in range(20000)]
+
+    responses = get_pass_res(name="12345678-1234-5678-1234-567812345678", dpaths=paths, aois=aois, output_path=paths[0])  # type: ignore[arg-type]
+    assert len(responses) > 1
+    for response in responses:
+        assert len(json.dumps(response).encode("utf-8")) <= MAX_MSG_BYTES
+
+
+def test_get_fail_res_marks_status_failed():
+    """Failure messages should carry a failed status attribute."""
+    response = get_fail_res(
+        name="12345678-1234-5678-1234-567812345678",  # type: ignore[arg-type]
+        dpaths=["s3://tns/path.parquet"],
+        err_str="boom",
+    )
+    assert response["MessageAttributes"]["status"]["StringValue"] == "failed"
+
+
+def test_handler_publishes_failure_message(monkeypatch, parquet_dir: Path):
+    """The handler should publish a failure message when processing raises."""
+    publisher = RecordingPublisher([])
+
+    def fake_create_context():
+        return AppContext(
+            config=AppConfig(
+                region="us-west-2",
+                bucket="unused",
+                sns_out_arn="arn:aws:sns:us-west-2:123456789012:tns",
+                aoi_key=str(parquet_dir / "missing.parquet"),
+                output_prefix=str(parquet_dir / "output"),
+            ),
+            store=FilesystemGeoParquetStore(),
+            sns_client=publisher,
+        )
+
+    monkeypatch.setattr("db_lambda.create_app_context", fake_create_context)
+
+    event = build_sqs_event("s3://tns-bucket/compare/missing.parquet")
+    with pytest.raises(Exception):
+        handler(event, None)
+
+    assert len(publisher.published) == 1
+    attrs = publisher.published[0]["MessageAttributes"]
+    assert attrs["status"]["StringValue"] == "failed"

@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-CMD="terraform apply"
+set -euo pipefail
 
-VAR_PATH=$1
-if [[ "${VAR_PATH}" != "" ]]; then
-    VAR_PATH=$(realpath $VAR_PATH)
+CMD=(terraform apply)
+
+VAR_PATH="${1:-}"
+if [[ -n "${VAR_PATH}" ]]; then
+    VAR_PATH=$(realpath "$VAR_PATH")
     echo "VAR_PATH adjusted to ${VAR_PATH}"
-    CMD="${CMD} --var-file ${VAR_PATH}"
+    CMD+=(--var-file "$VAR_PATH")
 fi
-echo $CMD
+printf '%s\n' "${CMD[*]}"
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 
-echo $SCRIPT_DIR
+echo "$SCRIPT_DIR"
 
-cd $SCRIPT_DIR/../terraform
-eval $CMD
+cd "$SCRIPT_DIR/../terraform"
+"${CMD[@]}"

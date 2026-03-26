@@ -2,5 +2,6 @@ data/
 build/
 *.tfvars
 *.tfstate
+.terraform/
 **/__pycache__/
 terraform/resources/base/docker/handlers

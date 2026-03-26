@@ -2,11 +2,12 @@ name: 'tns'
 channels:
   - conda-forge
 dependencies:
-  - terraform
-  - boto3
   - python
-  - h3-py
+  - python<3.14
+  - boto3
   - geopandas
   - pyarrow
-  - python<3.14
+  - pytest
+  - shapely
   - jq
+  - terraform

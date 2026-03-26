@@ -1,4 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 
-export TF_CLI_CONFIG_FILE=$(realpath $SCRIPT_DIR/../terraform/.terraformrc)
-cd $SCRIPT_DIR/../terraform && terraform init
+export TF_CLI_CONFIG_FILE=$(realpath "$SCRIPT_DIR/../terraform/.terraformrc")
+cd "$SCRIPT_DIR/../terraform" && terraform init

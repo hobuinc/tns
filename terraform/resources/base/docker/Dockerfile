@@ -1,6 +1,7 @@
 ARG LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023-x86_64"
 ARG RIE_ARCH="x86_64"
 ARG PYTHON_VERSION="3.13"
+ARG AWS_LAMBDA_RIE_VERSION="1.27"
 
 FROM --platform=$TARGETPLATFORM condaforge/miniforge3:latest as condasetup
 LABEL MAINTAINER="Howard Butler <howard@hobu.co>"
@@ -40,6 +41,7 @@ ARG RIE_ARCH
 ARG LAMBDA_IMAGE
 ARG TARGETPLATFORM
 ARG TARGETARCH
+ARG AWS_LAMBDA_RIE_VERSION
 ENV TARGETPLATFORM=${TARGETPLATFORM:-linux/amd64}
 ENV TARGETARCH=${TARGETARCH:-amd64}
 
@@ -59,7 +61,7 @@ ENV LD_LIBRARY_PATH=${CONDAENV}/lib
 ENV HOME=/var/task/
 
 RUN /var/task/bin/python -m pip install awslambdaric
-ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie-${RIE_ARCH} /usr/bin/aws-lambda-rie
+ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/download/v${AWS_LAMBDA_RIE_VERSION}/aws-lambda-rie-${RIE_ARCH} /usr/bin/aws-lambda-rie
 
 RUN chmod +x /usr/bin/aws-lambda-rie
 
@@ -67,7 +69,6 @@ RUN chmod +x /usr/bin/aws-lambda-rie
 WORKDIR /var/task
 COPY python-entry.sh ./
 RUN chmod +x /var/task/python-entry.sh
-COPY handlers/ /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda
-COPY handlers/config.py /var/task/
+COPY handlers/ /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda/
 COPY root-bashrc /root/.bashrc
 ENTRYPOINT [ "/var/task/python-entry.sh" ]

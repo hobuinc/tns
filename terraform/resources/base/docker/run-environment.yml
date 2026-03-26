@@ -3,11 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - boto3
-  - h3-py
-  - shapely
+  - geopandas
   - pandas
   - pyarrow
-  - gdal
-  - libgdal-arrow-parquet
-  - duckdb
-  - polars
+  - shapely

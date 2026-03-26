@@ -1,19 +1,21 @@
 #!/bin/bash
+set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
-cd $SCRIPT_DIR
+cd "$SCRIPT_DIR"
 DOCKER_DIR="../terraform/resources/base/docker"
-ARCH=amd64
+PLATFORM=linux/amd64
+IMAGE_TAG=amd64
 RIE_ARCH=x86_64
-REPO=tns_ecr
+TNS_ENV="${TNS_ENV:-dev}"
+REPO="tns-${TNS_ENV}-ecr"
 PYTHON_VERSION=3.13
 LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
 
-set -e
-CONTAINER_NAME="$1"
+CONTAINER_NAME="${1:-}"
 if [[ "$CONTAINER_NAME" == "" ]]
 then
-    CONTAINER_NAME="$REPO:$ARCH"
+    CONTAINER_NAME="$REPO:$IMAGE_TAG"
     echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
 fi
 
@@ -34,19 +36,17 @@ fi
 FULL_CONTAINER_NAME="$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$CONTAINER_NAME"
 
 # Log into ECR with AWS Credentials
-COMMAND="aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
-echo "$COMMAND"
-eval $COMMAND
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
-ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(aws ecr --region "$REGION" describe-repositories | jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
 echo "Repository found ${ECR_REPONAME}"
 
 if [[ "$ECR_REPONAME" == "" ]]
 then
-    aws ecr create-repository --region $REGION --repository-name $REPO
+    aws ecr create-repository --region "$REGION" --repository-name "$REPO"
 fi
 
-ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(aws ecr --region "$REGION" describe-repositories | jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
 echo "Checking if we find ECR_REPONAME: $ECR_REPONAME"
 if [[ "$ECR_REPONAME" == "" ]]
 then
@@ -54,18 +54,19 @@ then
     exit 1
 fi
 
+rm -rf "$DOCKER_DIR/handlers"
+mkdir -p "$DOCKER_DIR/handlers"
 cp -r "../src/." "$DOCKER_DIR/handlers/"
-cp -r "../src/." "$DOCKER_DIR/handlers/src/"
-echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
-docker buildx build --platform linux/${ARCH} \
+echo "Building image platform ${PLATFORM} with image $LAMBDA_IMAGE"
+docker buildx build --platform "${PLATFORM}" \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
     --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
-    --build-arg RIE_ARCH=$RIE_ARCH \
+    --build-arg RIE_ARCH="$RIE_ARCH" \
     --load \
-    -t ${FULL_CONTAINER_NAME} \
+    -t "${FULL_CONTAINER_NAME}" \
     "$DOCKER_DIR/" \
     -f "$DOCKER_DIR/Dockerfile"
-docker push ${FULL_CONTAINER_NAME}
+docker push "${FULL_CONTAINER_NAME}"
 
 pass_fail=$?
 if [[ $pass_fail == 0 ]]

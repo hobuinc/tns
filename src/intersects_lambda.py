@@ -9,7 +9,7 @@ from uuid import uuid4, UUID
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
-DDB_PATH = "/tmp/.duckdb"
+# DDB_PATH = "/tmp/.duckdb"
 
 
 class CloudConfig:
@@ -44,9 +44,8 @@ class CloudConfig:
                     "Required variable S3_BUCKET missing from environment."
                 )
 
-            con = duckdb.connect(
-                database=DDB_PATH, config={"memory_limit": "2.5GB"}
-            )
+            con = duckdb.connect(config={"memory_limit": "2.5GB"})
+            # lambdas can only create files in /tmp
             con.sql(f"SET extension_directory = '{EXT_PATH}';")
             con.execute("INSTALL httpfs; LOAD httpfs")
             con.execute("INSTALL spatial; LOAD spatial")
@@ -58,10 +57,7 @@ class CloudConfig:
                     PROVIDER CREDENTIAL_CHAIN)
             """
             # catch possibility of .duckdb file already made
-            try:
-                con.execute(ex_str)
-            except duckdb.InvalidInputException:
-                print("Using previously made duckdb files.")
+            con.execute(ex_str)
 
             self.con = con
             self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"

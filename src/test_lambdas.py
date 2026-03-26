@@ -1,12 +1,13 @@
 import os
 import boto3
 import json
-import shutil
+# import shutil
 from uuid import uuid4
 import time
 import pytest
 
-from intersects_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
+# from intersects_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
+from intersects_lambda import handler, get_pass_res
 
 
 def clear_sqs(sqs_arn, region):
@@ -33,11 +34,12 @@ def clear_sqs(sqs_arn, region):
     return messages
 
 
-def test_big(region, sqs_in, big_event, big_aoi_fill):
+def test_big(region, sqs_in, sqs_out, big_event, big_aoi_fill):
     clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
-    shutil.rmtree(EXT_PATH)
-    os.remove(DDB_PATH)
+    # shutil.rmtree(EXT_PATH)
+    # os.remove(DDB_PATH)
 
     time1 = time.time()
     aois = handler(big_event, None)
@@ -51,13 +53,15 @@ def test_big(region, sqs_in, big_event, big_aoi_fill):
         assert status == "succeeded", json.dumps(attrs["error"])
 
     clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
-    os.remove(DDB_PATH)
-    shutil.rmtree(EXT_PATH)
+    # os.remove(DDB_PATH)
+    # shutil.rmtree(EXT_PATH)
 
 
-def test_handler(sqs_in, region, event, aoi_fill, config):
+def test_handler(sqs_in, sqs_out, region, event, aoi_fill, config):
     clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
     aoi_res = handler(event, None)
     assert len(aoi_res) == 1
@@ -81,6 +85,7 @@ def test_handler(sqs_in, region, event, aoi_fill, config):
     assert set(s3_aois) == set(aois)
 
     clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
 
 def test_pass_res():

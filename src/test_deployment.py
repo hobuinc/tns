@@ -72,7 +72,7 @@ def sqs_listen(sqs_arn, region, retries=5):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=5
+            WaitTimeSeconds=10
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
@@ -214,6 +214,9 @@ def test_lambda(
     put_parquet(bucket_name, states_tiles)
 
     messages = sqs_listen(sqs_out, region)
+    # if lambda is cold started it can take an extra cycle
+    if not messages:
+        messages = sqs_listen(sqs_out, region)
     assert len(messages) == 1
     m = messages[0]
 
@@ -238,3 +241,6 @@ def test_lambda(
     s3_aois = s3_info.pl().get_column("aois").to_list()
     assert len(s3_aois) == len(states)
     assert set(s3_aois) == set(states)
+
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)

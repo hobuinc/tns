@@ -59,7 +59,7 @@ def test_big(region, sqs_in, sqs_out, big_event, big_aoi_fill):
     # shutil.rmtree(EXT_PATH)
 
 
-def test_handler(sqs_in, sqs_out, region, event, aoi_fill, config):
+def test_handler(sqs_in, sqs_out, region, bucket_name, event, aoi_fill, config):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
@@ -76,7 +76,7 @@ def test_handler(sqs_in, sqs_out, region, event, aoi_fill, config):
     assert len(aois) == 50
     source_files = json.loads(attrs["source_files"]["StringValue"])
     assert len(source_files) == 1
-    assert source_files[0] == "s3://tns-bucket-premade/compare/geom.parquet"
+    assert source_files[0] == f"s3://{bucket_name}/compare/geom.parquet"
     s3_path = attrs["s3_output_path"]["StringValue"]
 
     s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")

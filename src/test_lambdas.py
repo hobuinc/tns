@@ -88,8 +88,8 @@ def test_handler(sqs_in, sqs_out, region, bucket_name, event, aoi_fill, config):
     clear_sqs(sqs_out, region)
 
 
-def test_pass_res():
-    paths = ["s3://tns-sample-bucket/tns-sample-path/key.parquet"]
+def test_pass_res(bucket_name):
+    paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
 
     # basic
     pass_list = ["0123456789" for n in range(15000)]

@@ -19,6 +19,7 @@ def clear_sqs(sqs_arn, region):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
+            WaitTimeSeconds=2
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
@@ -32,11 +33,8 @@ def clear_sqs(sqs_arn, region):
     return messages
 
 
-def test_big(tf_output, big_event, big_aoi_fill):
-    os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
-
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+def test_big(region, sqs_in, big_event, big_aoi_fill):
+    clear_sqs(sqs_in, region)
 
     shutil.rmtree(EXT_PATH)
     os.remove(DDB_PATH)
@@ -52,17 +50,14 @@ def test_big(tf_output, big_event, big_aoi_fill):
         status = attrs["status"]["StringValue"]
         assert status == "succeeded", json.dumps(attrs["error"])
 
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+    clear_sqs(sqs_in, region)
 
     os.remove(DDB_PATH)
     shutil.rmtree(EXT_PATH)
 
 
-def test_handler(tf_output, event, aoi_fill, config):
-    os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
-
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+def test_handler(sqs_in, region, event, aoi_fill, config):
+    clear_sqs(sqs_in, region)
 
     aoi_res = handler(event, None)
     assert len(aoi_res) == 1
@@ -85,7 +80,7 @@ def test_handler(tf_output, event, aoi_fill, config):
     assert len(aois) == len(s3_aois)
     assert set(s3_aois) == set(aois)
 
-    clear_sqs(tf_output["sqs_in"], tf_output["aws_region"])
+    clear_sqs(sqs_in, region)
 
 
 def test_pass_res():
@@ -109,6 +104,8 @@ def test_pass_res():
 
 
 def test_failures(sqs_out: str, region: str):
+    clear_sqs(sqs_out, region)
+
     def get_attrs(msg):
         body = json.loads(msg[0]["Body"])
         return body["MessageAttributes"]
@@ -128,10 +125,10 @@ def test_failures(sqs_out: str, region: str):
     with pytest.raises(Exception) as e2:
         handler(fake_event, None)
     os.environ["S3_BUCKET"] = s3_bucket
-    assert "KeyError('S3_BUCKET')" in str(e2)
+    assert "Required variable S3_BUCKET missing from environment" in str(e2)
     msg2 = clear_sqs(sqs_out, region)
     a2 = get_attrs(msg2)
     assert a2["status"]["Value"] == "failed"
-    assert "KeyError: 'S3_BUCKET'" in a2["error"]["Value"]
+    assert "Required variable S3_BUCKET missing from environment" in a2["error"]["Value"]
 
     clear_sqs(sqs_out, region)

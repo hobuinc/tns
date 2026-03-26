@@ -19,12 +19,16 @@ class CloudConfig:
         if "AWS_REGION" in env_keys:
             self.region = os.environ["AWS_REGION"]
         else:
-            self.region = "us-west-2"
+            raise ValueError(
+                "Required variable AWS_REGION missing from environment."
+            )
 
         if "SNS_OUT_ARN" in env_keys:
             self.sns_out_arn = os.environ["SNS_OUT_ARN"]
         else:
-            self.sns_out_arn = None
+            raise ValueError(
+                "Required variable SNS_OUT_ARN missing from environment."
+            )
 
         self.sns = boto3.client("sns", region_name=self.region)
         self.s3 = boto3.client("s3", region_name=self.region)
@@ -33,8 +37,12 @@ class CloudConfig:
         # failures before this can't be published because required info
         # isn't available yet
         try:
-
-            self.bucket = os.environ["S3_BUCKET"]
+            if "S3_BUCKET" in env_keys:
+                self.bucket = os.environ["S3_BUCKET"]
+            else:
+                raise ValueError(
+                    "Required variable S3_BUCKET missing from environment."
+                )
 
             con = duckdb.connect(
                 database=DDB_PATH, config={"memory_limit": "2.5GB"}
@@ -62,7 +70,6 @@ class CloudConfig:
             fail_msg = get_fail_res(uuid4(), [], fail_tb)
             self.sns.publish(TopicArn=self.sns_out_arn, **fail_msg)
             raise e
-
 
     def __enter__(self):
         return self
@@ -164,13 +171,13 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
     return get_pass_res(name, datapaths, aoi_list, full_s3_path)
 
 
-
 # Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
 # AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
 def handler(event: dict[str, str], context):
     import time
+
     print("Event:", json.dumps(event))
     data_paths = []
     with CloudConfig() as config:
@@ -200,4 +207,3 @@ def handler(event: dict[str, str], context):
             fail_msg = get_fail_res(fail_name, data_paths, exc_str)
             config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
             raise e
-

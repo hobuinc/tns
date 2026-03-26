@@ -1,4 +1,3 @@
-data/
 build/
 *.tfvars
 *.tfstate

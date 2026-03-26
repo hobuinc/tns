@@ -11,17 +11,6 @@ from conftest import put_parquet, clear_sqs
 from intersects_lambda import CloudConfig
 
 
-# def put_polygon(bucket_name, polygon, pk_and_model):
-#     gdf = st.GeoDataFrame(
-#         data={"pk_and_model": [pk_and_model], "geometry": [polygon.wkb]},
-#         strict=True,
-#         infer_schema_length=True,
-#         geometry_format="wkb",
-#     )
-
-#     put_parquet(bucket_name, gdf)
-
-
 def delete_sqs_message(e, sqs_arn, region):
     sqs = boto3.client("sqs", region_name=region)
     queue_name = sqs_arn.split(":")[-1]

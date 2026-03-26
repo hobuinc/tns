@@ -8,15 +8,13 @@ import boto3
 from pathlib import Path
 from time import sleep
 
-import polars_st as st
-from shapely import Polygon
-
 from intersects_lambda import CloudConfig
 
 
 TILES_PER_FILE = 1000
 T = TypeVar("T")
 Fixture = Generator[T, None, None]
+EventType = dict[str, list[dict[str, any]]]
 
 
 def clear_sqs(sqs_arn: str, region: str) -> None:
@@ -53,7 +51,7 @@ def get_message(
         QueueUrl=queue_url,
         MaxNumberOfMessages=min(num_messages, 10),
         MessageSystemAttributeNames=["All"],
-        WaitTimeSeconds=5
+        WaitTimeSeconds=5,
     )
     try:
         messages = message["Messages"]
@@ -66,30 +64,21 @@ def get_message(
 
 
 def put_parquet(
-    bucket_name, gdf: st.GeoDataFrame, idx: int | None = None
+    bucket: str,
+    key: str,
+    filepath: Path,
+    config: CloudConfig,
 ) -> None:
-    if idx is not None:
-        key = f"compare/geom_{idx}.parquet"
-    else:
-        key = "compare/geom.parquet"
-
-    vsis_path = f"/vsis3/{bucket_name}/{key}"
-    df_kwargs = {
-        "compression": "zstd",
-        "WRITE_COVERING_BBOX": "yes",
-        "USE_PARQUET_GEO_TYPES": "yes",
-        "EDGES": "spherical",
-    }
-
-    gdf = gdf.with_columns(st.geom().st.set_srid(4326))
-    gdf.st.write_file(
-        path=vsis_path, driver="PARQUET", layer="product", **df_kwargs
-    )
+    outpath = f"s3://{bucket}/{key}"
+    duck_cmd = f"""
+        COPY
+            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO
+            '{outpath}' (FORMAT parquet, COMPRESSION zstd)
+    """
+    config.con.sql(duck_cmd)
 
 
-def get_event(
-    messages: dict[str, any], sqs_arn: str, region: str
-) -> dict[str, list[dict[str, any]]]:
+def get_event(messages: dict[str, any], sqs_arn: str, region: str) -> EventType:
     return {
         "Records": [
             {
@@ -113,66 +102,27 @@ def get_event(
     }
 
 
-@pytest.fixture(scope="function")
-def big_states_tiles() -> Fixture[st.GeoDataFrame]:
-    states_json = json.load(open("./src/geoms.json"))
-
-    def feature_to_wkb(f):
-        p = Polygon(f["geometry"]["rings"][0])
-        return p.wkb
-
-    rng = int(TILES_PER_FILE / 50)
-    states_gdf = st.GeoDataFrame(
-        [
-            {
-                "pk_and_model": f"raster_{idx}_{idx2}",
-                "geometry": feature_to_wkb(feature),
-            }
-            for idx, feature in enumerate(states_json["features"])
-            for idx2 in range(rng)
-        ]
-    )
-    yield states_gdf
 
 
 @pytest.fixture(scope="function")
-def states_aois() -> Fixture[st.GeoDataFrame]:
-    states_json = json.load(open("./src/geoms.json"))
-
-    def feature_to_wkb(f):
-        p = Polygon(f["geometry"]["rings"][0])
-        return p.wkb
-
-    states_gdf = st.GeoDataFrame(
-        [
-            {
-                "pk_and_model": f"{feature['attributes']['STATE_NAME']}",
-                "geometry": feature_to_wkb(feature),
-            }
-            for idx, feature in enumerate(states_json["features"])
-        ]
-    )
-    yield states_gdf
+def small_aois_path(test_dir: Path) -> Fixture[str]:
+    yield test_dir / "data" / "state_aois.parquet"
 
 
 @pytest.fixture(scope="function")
-def states_tiles() -> Fixture[st.GeoDataFrame]:
-    states_json = json.load(open("./src/geoms.json"))
+def small_tiles_path(test_dir: Path) -> Fixture[str]:
+    yield test_dir / "data" / "state_tiles.parquet"
 
-    def feature_to_wkb(f):
-        p = Polygon(f["geometry"]["rings"][0])
-        return p.wkb
 
-    states_gdf = st.GeoDataFrame(
-        [
-            {
-                "pk_and_model": f"raster_{idx}",
-                "geometry": feature_to_wkb(feature),
-            }
-            for idx, feature in enumerate(states_json["features"])
-        ]
-    )
-    yield states_gdf
+@pytest.fixture(scope="function")
+def big_aois_path(test_dir: Path) -> Fixture[str]:
+    yield test_dir / "data" / "big_aoi_set.parquet"
+
+
+@pytest.fixture(scope="function")
+def big_tiles_path(test_dir: Path) -> Fixture[str]:
+    yield test_dir / "data" / "big_state_tiles.parquet"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def env_vars(tf_output: dict[str, str]) -> None:
@@ -187,9 +137,13 @@ def config() -> Fixture[CloudConfig]:
 
 
 @pytest.fixture(scope="session")
-def tf_dir() -> Fixture[Path]:
-    cur_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    tf_dir = cur_dir / ".." / "terraform"
+def test_dir() -> Fixture[Path]:
+    yield Path(os.path.dirname(os.path.abspath(__file__)))
+
+
+@pytest.fixture(scope="session")
+def tf_dir(test_dir: Path) -> Fixture[Path]:
+    tf_dir = test_dir / ".." / "terraform"
     yield tf_dir
 
 
@@ -213,21 +167,20 @@ def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
 def region(tf_output: dict[str, str]) -> Fixture[str]:
     yield tf_output["aws_region"]
 
+
 @pytest.fixture(scope="session")
 def sqs_in(tf_output: dict[str, str]) -> Fixture[str]:
     yield tf_output["sqs_in"]
+
 
 @pytest.fixture(scope="session")
 def sqs_out(tf_output: dict[str, str]) -> Fixture[str]:
     yield tf_output["sqs_out"]
 
+
 @pytest.fixture(scope="session")
 def bucket_name(tf_output: dict[str, str]) -> Fixture[str]:
     yield tf_output["s3_bucket_name"]
-
-@pytest.fixture(scope="function")
-def pk_and_model() -> Fixture[str]:
-    yield "raster_1234"
 
 
 @pytest.fixture(scope="function")
@@ -236,9 +189,10 @@ def messages(
     region: str,
     sqs_in: str,
     bucket_name: str,
-    states_tiles: st.GeoDataFrame,
+    small_tiles_path: Path,
 ) -> Fixture[dict[str, any]]:
-    put_parquet(bucket_name, states_tiles)
+    key = "compare/geom.parquet"
+    put_parquet(bucket_name, key, small_tiles_path, config)
     messages = get_message(sqs_in, region)
     yield messages
 
@@ -246,17 +200,22 @@ def messages(
 @pytest.fixture(scope="function")
 def event(
     messages: dict[str, any], sqs_in: str, region: str
-) -> Fixture[dict[str, list[dict[str, any]]]]:
+) -> Fixture[EventType]:
     yield get_event(messages, sqs_in, region)
 
 
 @pytest.fixture(scope="function")
 def big_messages(
-    sqs_in: str, region: str, bucket_name: str, big_states_tiles: st.GeoDataFrame
+    sqs_in: str,
+    region: str,
+    bucket_name: str,
+    big_tiles_path: Path,
+    config: CloudConfig,
 ) -> Fixture[list[dict[str, any]]]:
     amt = 10
     for n in range(amt):
-        put_parquet(bucket_name, big_states_tiles, n)
+        key = f"compare/geom_{n}.parquet"
+        put_parquet(bucket_name, key, big_tiles_path, config)
     messages = []
     retry = 5
     count = 0
@@ -273,52 +232,24 @@ def big_messages(
 @pytest.fixture(scope="function")
 def big_event(
     big_messages: list, sqs_in: str, region: str
-) -> Fixture[dict[str, list[dict[str, any]]]]:
+) -> Fixture[EventType]:
     event = get_event(big_messages, sqs_in, region)
     yield event
 
 
 @pytest.fixture(scope="function")
 def aoi_fill(
-    bucket_name, states_aois: st.GeoDataFrame, config: CloudConfig
+    bucket_name: str, small_aois_path: Path, config: CloudConfig
 ) -> Fixture[None]:
     key = "subs/subscriptions.parquet"
-    vsis_path = f"/vsis3/{bucket_name}/{key}"
-    df_kwargs = {
-        "compression": "zstd",
-        "WRITE_COVERING_BBOX": "yes",
-        "USE_PARQUET_GEO_TYPES": "yes",
-        "EDGES": "spherical",
-    }
-    gdf = states_aois.with_columns(st.geom().st.set_srid(4326))
-    yield gdf.st.write_file(
-        path=vsis_path, driver="PARQUET", layer="product", **df_kwargs
-    )
-    config.s3.delete_object(Bucket=bucket_name, Key=key)
+    put_parquet(bucket_name, key, small_aois_path, config)
 
 
 @pytest.fixture(scope="function")
 def big_aoi_fill(
     bucket_name: str,
+    big_aois_path: Path,
     config: CloudConfig,
 ) -> Fixture[None]:
-    cur_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    data_path = cur_dir / "../data/" / "aoi_uc.parquet"
-
     key = "subs/subscriptions.parquet"
-    amt = 10000
-    data = config.con.sql(f"""
-                SELECT PROJECT_ID as pk_and_model, geometry, geometry_bbox
-                FROM read_parquet('{data_path}')
-                LIMIT {amt}
-        """)  # noqa
-    sql = f"""
-        COPY
-            data
-            TO 's3://{bucket_name}/{key}' (FORMAT parquet, COMPRESSION zstd)
-    """
-    config.con.sql(sql)
-    config.con.close()
-    yield
-
-    config.s3.delete_object(Bucket=bucket_name, Key=key)
+    put_parquet(bucket_name, key, big_aois_path, config)

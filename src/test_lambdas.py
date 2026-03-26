@@ -1,16 +1,17 @@
 import os
 import boto3
 import json
-# import shutil
+
+import shutil
 from uuid import uuid4
 import time
 import pytest
 
-# from intersects_lambda import handler, EXT_PATH, DDB_PATH, get_pass_res
-from intersects_lambda import handler, get_pass_res
+from conftest import EventType
+from intersects_lambda import CloudConfig, handler, get_pass_res, EXT_PATH
 
 
-def clear_sqs(sqs_arn, region):
+def clear_sqs(sqs_arn: str, region: str):
     sqs = boto3.client("sqs", region_name=region)
     queue_name = sqs_arn.split(":")[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -20,7 +21,7 @@ def clear_sqs(sqs_arn, region):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=2
+            WaitTimeSeconds=2,
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
@@ -34,12 +35,17 @@ def clear_sqs(sqs_arn, region):
     return messages
 
 
-def test_big(region, sqs_in, sqs_out, big_event, big_aoi_fill):
+def test_big(
+    region: str,
+    sqs_in: str,
+    sqs_out: str,
+    big_event: EventType,
+    big_aoi_fill: None,
+):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
-    # shutil.rmtree(EXT_PATH)
-    # os.remove(DDB_PATH)
+    shutil.rmtree(EXT_PATH)
 
     time1 = time.time()
     aois = handler(big_event, None)
@@ -55,11 +61,16 @@ def test_big(region, sqs_in, sqs_out, big_event, big_aoi_fill):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
-    # os.remove(DDB_PATH)
-    # shutil.rmtree(EXT_PATH)
 
-
-def test_handler(sqs_in, sqs_out, region, bucket_name, event, aoi_fill, config):
+def test_handler(
+    sqs_in: str,
+    sqs_out: str,
+    region: str,
+    bucket_name: str,
+    event: EventType,
+    aoi_fill: None,
+    config: CloudConfig,
+):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
@@ -88,7 +99,7 @@ def test_handler(sqs_in, sqs_out, region, bucket_name, event, aoi_fill, config):
     clear_sqs(sqs_out, region)
 
 
-def test_pass_res(bucket_name):
+def test_pass_res(bucket_name: str):
     paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
 
     # basic
@@ -134,6 +145,9 @@ def test_failures(sqs_out: str, region: str):
     msg2 = clear_sqs(sqs_out, region)
     a2 = get_attrs(msg2)
     assert a2["status"]["Value"] == "failed"
-    assert "Required variable S3_BUCKET missing from environment" in a2["error"]["Value"]
+    assert (
+        "Required variable S3_BUCKET missing from environment"
+        in a2["error"]["Value"]
+    )
 
     clear_sqs(sqs_out, region)

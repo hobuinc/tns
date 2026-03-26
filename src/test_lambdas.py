@@ -69,8 +69,9 @@ def test_handler(tf_output, event, aoi_fill, config):
 
     aoi_res = aoi_res[0]
     attrs = aoi_res["MessageAttributes"]
-    if "error" in attrs.keys():
-        print(f"Error in messages: {attrs['error']['StringValue']}")
+    assert "error" not in attrs.keys(), (
+        f"Error in messages: {attrs['error']['StringValue']}"
+    )
 
     aois = json.loads(attrs["aoi_list"]["StringValue"])
     assert len(aois) == 50
@@ -106,31 +107,31 @@ def test_pass_res():
     types = [not isinstance(n, list) for n in big_splits]
     assert all(types)
 
+
 def test_failures(sqs_out: str, region: str):
     def get_attrs(msg):
-        body = json.loads(msg[0]['Body'])
-        return body['MessageAttributes']
+        body = json.loads(msg[0]["Body"])
+        return body["MessageAttributes"]
 
     # test bad event creation error catching
-    fake_event = {'Records': ['asdf']}
+    fake_event = {"Records": ["asdf"]}
     with pytest.raises(Exception) as e1:
         handler(fake_event, None)
     assert "string indices must be integers" in str(e1)
     msg1 = clear_sqs(sqs_out, region)
     a1 = get_attrs(msg1)
-    assert a1['status']['Value'] == 'failed'
-    assert 'string indices must be integers' in a1['error']['Value']
+    assert a1["status"]["Value"] == "failed"
+    assert "string indices must be integers" in a1["error"]["Value"]
 
     # test cloudconfig failure
-    s3_bucket = os.environ.pop('S3_BUCKET')
+    s3_bucket = os.environ.pop("S3_BUCKET")
     with pytest.raises(Exception) as e2:
         handler(fake_event, None)
-    os.environ['S3_BUCKET'] = s3_bucket
+    os.environ["S3_BUCKET"] = s3_bucket
     assert "KeyError('S3_BUCKET')" in str(e2)
     msg2 = clear_sqs(sqs_out, region)
     a2 = get_attrs(msg2)
-    assert a2['status']['Value'] == 'failed'
-    assert 'KeyError: \'S3_BUCKET\'' in a2['error']['Value']
-
+    assert a2["status"]["Value"] == "failed"
+    assert "KeyError: 'S3_BUCKET'" in a2["error"]["Value"]
 
     clear_sqs(sqs_out, region)

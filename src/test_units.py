@@ -1,6 +1,7 @@
 import json
 from uuid import uuid4
-from intersects_lambda import get_pass_res, get_fail_res
+
+from intersects_lambda import CloudConfig, get_pass_res, get_fail_res
 
 
 def test_fail_res(bucket_name: str):
@@ -39,3 +40,16 @@ def test_pass_res(bucket_name: str):
     big_splits = get_pass_res(uuid4(), paths, big_list, paths[0])
     types = [not isinstance(n, list) for n in big_splits]
     assert all(types)
+
+def test_config():
+    # set environment variables, which config will pull from
+    # then test that cloud config correctly pulls from those
+    region = 'us-east-1'
+    sns_arn = 'fake-arn::asdf'
+    bucket = 'fake-bucket'
+
+    config = CloudConfig(region, sns_arn, bucket)
+    assert config.region == region
+    assert config.sns_out_arn == sns_arn
+    assert config.bucket == bucket
+    assert config.aois_path == f"s3://{bucket}/subs/subscriptions.parquet"

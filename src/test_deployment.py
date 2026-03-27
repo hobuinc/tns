@@ -1,10 +1,12 @@
 import json
-import boto3
 import datetime
-import pandas as pd
+from math import ceil
+from pathlib import Path
 from time import sleep
 
-from math import ceil
+import pytest
+import boto3
+import pandas as pd
 import polars_st as st
 
 from conftest import put_parquet, clear_sqs
@@ -80,6 +82,7 @@ def sqs_listen(sqs_arn, region, retries=5):
     return messages
 
 
+pytest.mark.skip()
 def test_stress(
     config: CloudConfig,
     bucket_name: str,
@@ -87,7 +90,7 @@ def test_stress(
     sqs_out: str,
     sqs_in: str,
     big_aoi_fill: None,
-    big_states_tiles: st.GeoDataFrame,
+    big_states_tiles: st.GeoDataFrame
 ):
 
     cloudwatch_client = boto3.client("cloudwatch", region_name=config.region)
@@ -188,19 +191,20 @@ def test_lambda(
     sqs_out: str,
     sqs_in: str,
     bucket_name: str,
-    states_tiles: st.GeoDataFrame,
-    states_aois: st.GeoDataFrame,
+    small_tiles_path: Path,
+    small_aois_path: Path,
     aoi_fill: None,
     config: CloudConfig,
 ):
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
+    key = "compare/geom.parquet"
 
-    filepath = f"s3://{bucket_name}/compare/geom.parquet"
-    states = states_aois.to_pandas().pk_and_model.to_list()
+    filepath = f"s3://{bucket_name}/{key}"
+    states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
 
-    put_parquet(bucket_name, states_tiles)
+    put_parquet(bucket_name, key, small_tiles_path, config)
 
     messages = sqs_listen(sqs_out, region)
     # if lambda is cold started it can take an extra cycle

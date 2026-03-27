@@ -3,7 +3,6 @@ import boto3
 import json
 
 import shutil
-from uuid import uuid4
 import time
 import pytest
 
@@ -41,6 +40,7 @@ def test_big(
     sqs_out: str,
     big_event: EventType,
     big_aoi_fill: None,
+    env_vars: None
 ):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -68,8 +68,9 @@ def test_handler(
     region: str,
     bucket_name: str,
     event: EventType,
-    aoi_fill: None,
     config: CloudConfig,
+    aoi_fill: None,
+    env_vars: None
 ):
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -99,7 +100,7 @@ def test_handler(
     clear_sqs(sqs_out, region)
 
 
-def test_failures(sqs_out: str, region: str):
+def test_failures(sqs_out: str, region: str, env_vars: None):
     clear_sqs(sqs_out, region)
 
     def get_attrs(msg):

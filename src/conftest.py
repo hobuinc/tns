@@ -7,6 +7,7 @@ import boto3
 
 from pathlib import Path
 from time import sleep
+import polars_st as st
 
 from intersects_lambda import CloudConfig
 
@@ -102,6 +103,51 @@ def get_event(messages: dict[str, any], sqs_arn: str, region: str) -> EventType:
     }
 
 
+@pytest.fixture(scope="function")
+def tf_dir(test_dir: Path) -> Fixture[Path]:
+    tf_dir = test_dir / ".." / "terraform"
+    yield tf_dir
+
+
+@pytest.fixture(scope="function")
+def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
+    tf = subprocess.Popen(
+        ["terraform", "output", "--json"],
+        cwd=tf_dir,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf8",
+    )
+    a = tf.communicate()
+    output_json = json.loads(a[0])
+    key_vals = {k: v["value"] for k, v in output_json.items()}
+    yield key_vals
+
+
+@pytest.fixture(scope="function")
+def region(tf_output: dict[str, str]) -> Fixture[str]:
+    yield tf_output["aws_region"]
+
+
+@pytest.fixture(scope="function")
+def sqs_in(tf_output: dict[str, str]) -> Fixture[str]:
+    yield tf_output["sqs_in"]
+
+
+@pytest.fixture(scope="function")
+def sqs_out(tf_output: dict[str, str]) -> Fixture[str]:
+    yield tf_output["sqs_out"]
+
+
+@pytest.fixture(scope="function")
+def sns_out(tf_output: dict[str, str]) -> Fixture[str]:
+    yield tf_output["sns_out"]
+
+
+@pytest.fixture(scope="function")
+def bucket_name(tf_output: dict[str, str]) -> Fixture[str]:
+    yield tf_output["s3_bucket_name"]
 
 
 @pytest.fixture(scope="function")
@@ -123,8 +169,7 @@ def big_aois_path(test_dir: Path) -> Fixture[str]:
 def big_tiles_path(test_dir: Path) -> Fixture[str]:
     yield test_dir / "data" / "big_state_tiles.parquet"
 
-
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="function")
 def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
@@ -132,55 +177,13 @@ def env_vars(tf_output: dict[str, str]) -> None:
 
 
 @pytest.fixture(scope="function")
-def config() -> Fixture[CloudConfig]:
-    yield CloudConfig()
+def config(region: str, bucket_name: str, sns_out: str) -> Fixture[CloudConfig]:
+    yield CloudConfig(region, sns_out, bucket_name)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def test_dir() -> Fixture[Path]:
     yield Path(os.path.dirname(os.path.abspath(__file__)))
-
-
-@pytest.fixture(scope="session")
-def tf_dir(test_dir: Path) -> Fixture[Path]:
-    tf_dir = test_dir / ".." / "terraform"
-    yield tf_dir
-
-
-@pytest.fixture(scope="session")
-def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
-    tf = subprocess.Popen(
-        ["terraform", "output", "--json"],
-        cwd=tf_dir,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf8",
-    )
-    a = tf.communicate()
-    output_json = json.loads(a[0])
-    key_vals = {k: v["value"] for k, v in output_json.items()}
-    yield key_vals
-
-
-@pytest.fixture(scope="session")
-def region(tf_output: dict[str, str]) -> Fixture[str]:
-    yield tf_output["aws_region"]
-
-
-@pytest.fixture(scope="session")
-def sqs_in(tf_output: dict[str, str]) -> Fixture[str]:
-    yield tf_output["sqs_in"]
-
-
-@pytest.fixture(scope="session")
-def sqs_out(tf_output: dict[str, str]) -> Fixture[str]:
-    yield tf_output["sqs_out"]
-
-
-@pytest.fixture(scope="session")
-def bucket_name(tf_output: dict[str, str]) -> Fixture[str]:
-    yield tf_output["s3_bucket_name"]
 
 
 @pytest.fixture(scope="function")

@@ -9,63 +9,34 @@ from uuid import uuid4, UUID
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
-# DDB_PATH = "/tmp/.duckdb"
 
 
 class CloudConfig:
-    def __init__(self):
-        env_keys = os.environ.keys()
-
-        if "AWS_REGION" in env_keys:
-            self.region = os.environ["AWS_REGION"]
-        else:
-            raise ValueError(
-                "Required variable AWS_REGION missing from environment."
-            )
-
-        if "SNS_OUT_ARN" in env_keys:
-            self.sns_out_arn = os.environ["SNS_OUT_ARN"]
-        else:
-            raise ValueError(
-                "Required variable SNS_OUT_ARN missing from environment."
-            )
+    def __init__(self, region, sns_out_arn, bucket):
+        self.region = region
+        self.sns_out_arn = sns_out_arn
+        self.bucket = bucket
 
         self.sns = boto3.client("sns", region_name=self.region)
         self.s3 = boto3.client("s3", region_name=self.region)
         self.sqs = boto3.client("sqs", region_name=self.region)
 
-        # failures before this can't be published because required info
-        # isn't available yet
-        try:
-            if "S3_BUCKET" in env_keys:
-                self.bucket = os.environ["S3_BUCKET"]
-            else:
-                raise ValueError(
-                    "Required variable S3_BUCKET missing from environment."
-                )
+        con = duckdb.connect(config={"memory_limit": "2.5GB"})
+        # lambdas can only create files in /tmp
+        con.sql(f"SET extension_directory = '{EXT_PATH}';")
+        con.execute("INSTALL httpfs; LOAD httpfs")
+        con.execute("INSTALL spatial; LOAD spatial")
+        con.execute("INSTALL aws; LOAD aws")
+        ex_str = f"""
+            CREATE SECRET (
+                TYPE S3,
+                REGION '{self.region}',
+                PROVIDER CREDENTIAL_CHAIN)
+        """
+        con.execute(ex_str)
 
-            con = duckdb.connect(config={"memory_limit": "2.5GB"})
-            # lambdas can only create files in /tmp
-            con.sql(f"SET extension_directory = '{EXT_PATH}';")
-            con.execute("INSTALL httpfs; LOAD httpfs")
-            con.execute("INSTALL spatial; LOAD spatial")
-            con.execute("INSTALL aws; LOAD aws")
-            ex_str = f"""
-                CREATE SECRET (
-                    TYPE S3,
-                    REGION '{self.region}',
-                    PROVIDER CREDENTIAL_CHAIN)
-            """
-            # catch possibility of .duckdb file already made
-            con.execute(ex_str)
-
-            self.con = con
-            self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
-        except Exception as e:
-            fail_tb = traceback.format_exc()
-            fail_msg = get_fail_res(uuid4(), [], fail_tb)
-            self.sns.publish(TopicArn=self.sns_out_arn, **fail_msg)
-            raise e
+        self.con = con
+        self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
 
     def __enter__(self):
         return self
@@ -167,15 +138,43 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
     return get_pass_res(name, datapaths, aoi_list, full_s3_path)
 
 
+def get_env_vars(var_name: str):
+    env_keys = os.environ.keys()
+
+    if var_name in env_keys:
+        val = os.environ[var_name]
+        return val
+    else:
+        raise ValueError(
+            f"Required variable {var_name} missing from environment."
+        )
+
+
 # Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
 # AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
 # have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
 # {TileModel}_{TilePK}. All aois will come in in EPSG:4326
 def handler(event: dict[str, str], context):
-    print("Event:", json.dumps(event))
-    data_paths = []
-    with CloudConfig() as config:
+    sns_out = get_env_vars("SNS_OUT_ARN")
+    region = get_env_vars("AWS_REGION")
+
+    # catch any config errors that are created. Can only push errors to sns
+    # if we successfully got the environment variables beforehand
+
+    try:
+        bucket = get_env_vars("S3_BUCKET")
+        config = CloudConfig(region, sns_out, bucket)
+    except Exception as e:
+        sns = boto3.client("sns", region_name=region)
+        fail_tb = traceback.format_exc()
+        fail_msg = get_fail_res(uuid4(), [], fail_tb)
+        sns.publish(TopicArn=sns_out, **fail_msg)
+        raise e
+
+    with config:
         try:
+            print("Event:", json.dumps(event))
+            data_paths = []
             events = event["Records"]
 
             # collect data paths, delete messages after processing

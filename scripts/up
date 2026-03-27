@@ -9,6 +9,10 @@ if [[ -n "${VAR_PATH}" ]]; then
     echo "VAR_PATH adjusted to ${VAR_PATH}"
     CMD+=(--var-file "$VAR_PATH")
 fi
+shift $(( $# > 0 ? 1 : 0 ))
+if (( $# > 0 )); then
+    CMD+=("$@")
+fi
 printf '%s\n' "${CMD[*]}"
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)

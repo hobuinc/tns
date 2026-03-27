@@ -11,6 +11,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 module "tns_base" {
   source         = "./resources/base"
   env            = var.env
@@ -23,12 +25,16 @@ module "tns_lambdas" {
   source               = "./resources/lambdas"
   env                  = var.env
   sts_lambda_role_name = var.sts_lambda_role_name
+  aws_region           = var.aws_region
+  aws_account_id       = data.aws_caller_identity.current.account_id
 
   image_uri   = module.tns_base.image_uri
   bucket_name = module.tns_base.s3_bucket_name
 
   sqs_in_arn  = module.tns_base.sqs_in_arn
   sns_out_arn = module.tns_base.sns_out_arn
+
+  depends_on = [module.tns_base]
 }
 
 ####################################
@@ -44,15 +50,16 @@ variable "env" {
   type    = string
   default = "dev"
   validation {
-    condition     = can(regex("^(dev|test|prod)$", var.env))
-    error_message = "dev, test, or prod are the available env types."
+    condition     = length(trimspace(var.env)) > 0
+    error_message = "env must be a non-empty string."
   }
 }
 
 #defaults of "" allow easier conditionals
 variable "sts_lambda_role_name" {
-  type    = string
-  default = ""
+  description = "Existing Lambda IAM role name to use. Leave empty to let Terraform create an env-scoped role."
+  type        = string
+  default     = ""
 }
 
 variable "s3_bucket_name" {
@@ -97,6 +104,10 @@ output "sns_in" {
 
 output "container" {
   value = module.tns_base.image_uri
+}
+
+output "lambda_role_name" {
+  value = module.tns_lambdas.lambda_role_name
 }
 
 ######################################

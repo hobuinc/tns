@@ -10,6 +10,10 @@ if [[ -n "$VAR_PATH" ]]; then
     echo "VAR_PATH adjusted to ${VAR_PATH}"
     CMD+=(--var-file "$VAR_PATH")
 fi
+shift $(( $# > 0 ? 1 : 0 ))
+if (( $# > 0 )); then
+    CMD+=("$@")
+fi
 
 # Tearing down architecture, will prompt for confirmation
 printf '%s\n' "${CMD[*]}"

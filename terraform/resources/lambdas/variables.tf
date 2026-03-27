@@ -2,6 +2,14 @@ variable "env" {
   type = string
 }
 
+variable "aws_region" {
+  type = string
+}
+
+variable "aws_account_id" {
+  type = string
+}
+
 variable "image_uri" {
   type = string
 }
@@ -15,7 +23,8 @@ variable "sqs_in_arn" {
 }
 
 variable "sts_lambda_role_name" {
-  type = string
+  description = "Existing Lambda IAM role name to use. Leave empty to let Terraform create an env-scoped role."
+  type        = string
 }
 
 variable "bucket_name" {

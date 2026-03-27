@@ -18,7 +18,10 @@ from uuid import UUID, uuid4
 
 import boto3
 
-from tns_core import CompareArtifacts, S3GeoParquetStore, compare_geoparquets
+try:
+    from .tns_core import CompareArtifacts, S3GeoParquetStore, compare_geoparquets
+except ImportError:  # pragma: no cover - supports local direct module execution
+    from tns_core import CompareArtifacts, S3GeoParquetStore, compare_geoparquets
 
 
 LOGGER = logging.getLogger(__name__)

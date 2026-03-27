@@ -1,3 +1,8 @@
+resource "aws_cloudwatch_log_group" "compare_function" {
+  name              = "/aws/lambda/tns-${var.env}-comp-lambda"
+  retention_in_days = 14
+}
+
 resource "aws_lambda_function" "compare_function" {
 
   function_name = "tns-${var.env}-comp-lambda"
@@ -20,6 +25,8 @@ resource "aws_lambda_function" "compare_function" {
       S3_BUCKET   = var.bucket_name
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.compare_function]
 }
 
 resource "aws_lambda_event_source_mapping" "compare_event_map" {

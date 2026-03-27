@@ -71,5 +71,9 @@ data "aws_ecr_image" "runner_image" {
 }
 
 output "image_uri" {
-  value = local.image_uri
+  value = (
+    var.ecr_image_uri == "" ?
+    data.aws_ecr_image.runner_image[0].image_uri :
+    local.image_uri
+  )
 }

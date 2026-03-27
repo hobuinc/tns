@@ -180,3 +180,35 @@ The lockfile helps make provider resolution reproducible across machines. The lo
 ### Remaining caveat
 
 `terraform validate` still fails in this environment because the provider plugins are not loading correctly under the current `conda run` runtime. The failure appears to be environmental and occurs after provider installation, not during HCL parsing or module resolution.
+
+## 15. Deployment debugging after the last commit
+
+### What happened
+
+After the last commit, live AWS deployment work continued against the `hobutnstest` environment in `us-west-2`. That deployment work exposed several issues that did not appear in the local unit suite:
+
+- The first deployment attempts failed before reaching a healthy Lambda because the image packaging path in [terraform/resources/base/docker/Dockerfile](/Users/hobu/dev/git/tns/terraform/resources/base/docker/Dockerfile) relied on `conda-pack` to relocate the runtime environment, and that step failed with `CondaPackError`.
+- Once the image packaging was repaired, Terraform still raced ahead and attempted to create the Lambda function before the ECR image tag was available to Lambda.
+- After the Lambda could be created, the first end-to-end smoke test still failed because [src/db_lambda.py](/Users/hobu/dev/git/tns/src/db_lambda.py) imported `tns_core` as a top-level module, while the deployed image packages the source under `tns_lambda/`.
+
+### What changed
+
+- Reworked [terraform/resources/base/docker/Dockerfile](/Users/hobu/dev/git/tns/terraform/resources/base/docker/Dockerfile) so the runtime Conda environment is created directly at `/var/task` instead of being relocated with `conda-pack`.
+- Pinned Python in [terraform/resources/base/docker/run-environment.yml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/run-environment.yml) so the packaged site-packages path matches the Lambda image layout.
+- Updated [terraform/resources/base/ecr.tf](/Users/hobu/dev/git/tns/terraform/resources/base/ecr.tf) to output the resolved ECR image URI from `aws_ecr_image`, not just the tag string.
+- Added an explicit `depends_on = [module.tns_base]` to the Lambda module call in [terraform/main.tf](/Users/hobu/dev/git/tns/terraform/main.tf) so the function deployment waits for the image-producing module.
+- Updated [src/db_lambda.py](/Users/hobu/dev/git/tns/src/db_lambda.py) to use a package-relative import for `tns_core`, with a local fallback for direct module execution during development.
+
+### Why
+
+These changes were all driven by real deployment failures:
+
+- Removing `conda-pack` eliminated a packaging path that was fragile in practice and unnecessary once the environment was built directly at the Lambda runtime prefix.
+- Returning the ECR image output as a resolved image digest gave Terraform a real dependency edge, which stopped Lambda creation from racing the image push.
+- The relative import change made the Lambda code behave the same way in both local development and the packaged container image.
+
+### Outcome
+
+- A full `terraform apply` completed successfully for `hobutnstest`.
+- An end-to-end smoke test uploaded `subs/subscriptions.parquet` and a `compare/smoke-*.parquet` input object, and the deployed stack produced a valid `intersects/*.parquet` output with the expected three AOI-to-tile matches for Alabama, Alaska, and Arizona.
+- The smoke objects were removed and the `hobutnstest` deployment was fully destroyed afterward, so the repository history now records both the successful deployment path and the completed teardown.

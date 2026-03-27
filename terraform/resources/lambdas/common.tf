@@ -1,5 +1,7 @@
 locals {
-  name_prefix = "tns-${var.env}"
+  name_prefix          = "tns-${var.env}"
+  lambda_function_name = "${local.name_prefix}-comp-lambda"
+  lambda_log_group_arn = "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.lambda_function_name}"
 }
 
 data "aws_iam_role" "sts_lambda_role" {
@@ -52,14 +54,15 @@ resource "aws_iam_role_policy" "lambda_policy" {
 
       },
       {
-        Sid    = "LogCreation"
+        Sid    = "WriteFunctionLogs"
         Effect = "Allow"
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "*"
+        Resource = [
+          "${local.lambda_log_group_arn}:*"
+        ]
       },
       {
         Sid    = "GetS3Object"
@@ -84,4 +87,8 @@ resource "aws_iam_role_policy" "lambda_policy" {
       }
     ]
   })
+}
+
+output "lambda_role_name" {
+  value = var.sts_lambda_role_name == "" ? aws_iam_role.sts_lambda_role[0].name : data.aws_iam_role.sts_lambda_role[0].name
 }

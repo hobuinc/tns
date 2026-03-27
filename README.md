@@ -82,11 +82,18 @@ Optional variables:
 - `s3_bucket_name`: use an existing bucket instead of creating one.
 - `modify_bucket`: apply lifecycle rules to the selected bucket.
 - `ecr_image_uri`: use an already-pushed Lambda image instead of building one in Terraform.
+- `sts_lambda_role_name`: use an existing Lambda execution role instead of letting Terraform create `tns-<env>-lambda-role`.
 
 ### 4. Deploy
 
 ```bash
 ./scripts/up path/to/vars.tfvars
+```
+
+You can also pass extra Terraform CLI arguments through the helper script. For example, to explicitly supply an existing role name from the command line:
+
+```bash
+./scripts/up path/to/vars.tfvars -var="sts_lambda_role_name=my-existing-lambda-role"
 ```
 
 ### 5. Destroy

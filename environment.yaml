@@ -5,8 +5,12 @@ dependencies:
   - terraform
   - boto3
   - python
-  - h3-py
   - geopandas
   - pyarrow
   - python<3.14
   - jq
+  - gdal
+  - libgdal-arrow-parquet
+  - duckdb
+  - polars
+  - polars-st

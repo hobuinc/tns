@@ -30,6 +30,6 @@ resource aws_lambda_function compare_function {
 resource aws_lambda_event_source_mapping compare_event_map {
     event_source_arn = var.sqs_in_arn
     function_name    = aws_lambda_function.compare_function.arn
-    batch_size = 30
+    batch_size = 10
     maximum_batching_window_in_seconds = 20
 }

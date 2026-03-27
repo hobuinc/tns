@@ -24,7 +24,8 @@ class CloudConfig:
         con = duckdb.connect(config={"memory_limit": "2.5GB"})
         # lambdas can only create files in /tmp
         con.sql(f"SET extension_directory = '{EXT_PATH}';")
-        con.execute("INSTALL httpfs; LOAD httpfs")
+        con.execute("INSTALL cache_httpfs FROM community; LOAD cache_httpfs")
+        # con.execute("INSTALL httpfs; LOAD httpfs")
         con.execute("INSTALL spatial; LOAD spatial")
         con.execute("INSTALL aws; LOAD aws")
         ex_str = f"""

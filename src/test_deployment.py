@@ -1,12 +1,12 @@
 import json
-import datetime
 from math import ceil
 from pathlib import Path
-from time import sleep
+
+import time
+import datetime
 
 import pytest
 import boto3
-import pandas as pd
 import polars_st as st
 
 from conftest import put_parquet, clear_sqs
@@ -143,89 +143,28 @@ def test_stress(
     sqs_out: str,
     sqs_in: str,
     big_aoi_fill: None,
-    big_states_tiles: st.GeoDataFrame
+    big_tiles_path: Path
 ):
-
-    cloudwatch_client = boto3.client("cloudwatch", region_name=config.region)
-    lambda_start_time = datetime.datetime.now(datetime.timezone.utc)
 
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
-    tile_count = 10**5
+    tile_count = 10**6
     batch_size = 1000
     count = ceil(tile_count / batch_size)
     print(f"creating {count} files.")
+    start = time.time()
     for n in range(count):
-        put_parquet(bucket_name, big_states_tiles, n)
-
-    # figure out when lambdas are done creating things
-    # arbitrary
-    cur_vis = 1
-    prev_vis = 0
-    prev_empty = 0
-    while True:
-        end_time = datetime.datetime.now(datetime.timezone.utc)
-        start_time = end_time - datetime.timedelta(seconds=30)
-        res = cloudwatch_client.get_metric_statistics(
-            Namespace="AWS/SQS",
-            MetricName="ApproximateNumberOfMessagesVisible",
-            Dimensions=[
-                {"Name": "QueueName", "Value": "tns_compare_sqs_output"}
-            ],
-            StartTime=start_time,
-            EndTime=end_time,
-            Period=1,
-            Statistics=["Sum"],
-        )
-        if not res["Datapoints"]:
-            if prev_empty:
-                break
-            prev_empty = 1
-            sleep(30)
-            continue
-        df = pd.DataFrame(data=res["Datapoints"])
-        cur_vis = df[df.Timestamp == df.Timestamp.max()].iloc[0].Sum.item()
-        if cur_vis == prev_vis and prev_vis != 0:
-            break
-        sleep(30)
-
-    lambda_end_time = datetime.datetime.now(datetime.timezone.utc)
-    print("Start Time:", lambda_start_time)
-    print("End Time:", lambda_end_time)
-    total_time = (lambda_end_time - lambda_start_time).total_seconds()
-    print("Total Time: ", total_time)
-
-    # figure out stats on lambdas that were run
-    # Errors:
-    res = cloudwatch_client.get_metric_statistics(
-        Namespace="AWS/Lambda",
-        MetricName="Errors",
-        Dimensions=[{"Name": "FunctionName", "Value": "tns_comp_lambda"}],
-        StartTime=lambda_start_time,
-        EndTime=lambda_end_time,
-        Period=60,
-        Statistics=["Sum"],
-    )
-    assert not any([s["Sum"] for s in res["Datapoints"]])
-
-    # Average Durations
-    res = cloudwatch_client.get_metric_statistics(
-        Namespace="AWS/Lambda",
-        MetricName="Duration",
-        Dimensions=[{"Name": "FunctionName", "Value": "tns_comp_lambda"}],
-        StartTime=lambda_start_time,
-        EndTime=lambda_end_time,
-        Period=60,
-        Statistics=["Average"],
-    )
-    print("Average times: ", [s["Average"] for s in res["Datapoints"]])
+        key = f"compare/stress_{n}.parquet"
+        put_parquet(bucket_name, key, big_tiles_path, config)
 
     msg_count = 0
     failed = []
-    while msg_count < count * 50:
-        messages = sqs_listen(sqs_out, region, retries=0)
+    while True:
+        messages = sqs_listen(sqs_out, region, 10)
+        if not messages:
+            break
         for msg in messages:
             body = json.loads(msg["Body"])
 
@@ -236,5 +175,10 @@ def test_stress(
                 failed.append(attrs)
 
             msg_count += 1
-    assert not failed
 
+    # seconds to remove from time approx:
+    # 10 retries * 10 seconds per * 20 seconds sqs lead
+    retry_time = 10 * 10 + 20
+    proc_time = time.time() - start - retry_time
+    print(f"Took around {proc_time} seconds.")
+    assert not failed

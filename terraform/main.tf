@@ -26,17 +26,11 @@ module tns_lambdas {
     conda_env_name = var.conda_env_name
     sts_lambda_role_name = var.sts_lambda_role_name
 
-    table_name = module.tns_base.table_name
-    table_arn = module.tns_base.table_arn
     image_uri = module.tns_base.image_uri
     bucket_name = module.tns_base.s3_bucket_name
 
-    db_comp_sqs_in_arn = module.tns_base.db_comp_sqs_in_arn
-    db_comp_sns_out_arn = module.tns_base.db_comp_sns_out_arn
-    db_add_sqs_in_arn = module.tns_base.db_add_sqs_in_arn
-    db_add_sns_out_arn = module.tns_base.db_add_sns_out_arn
-    db_delete_sqs_in_arn =  module.tns_base.db_delete_sqs_in_arn
-    db_delete_sns_out_arn = module.tns_base.db_delete_sns_out_arn
+    sqs_in_arn = module.tns_base.sqs_in_arn
+    sns_out_arn = module.tns_base.sns_out_arn
 }
 
 ####################################
@@ -90,53 +84,22 @@ variable ecr_image_uri {
 output aws_region {
     value = var.aws_region
 }
-output table_name {
-    value = module.tns_base.table_name
-}
 output s3_bucket_name {
     value = module.tns_base.s3_bucket_name
 }
 
 #comp
-output db_compare_sqs_out {
-    value = module.tns_base.db_comp_sqs_out_arn
+output sqs_out {
+    value = module.tns_base.sqs_out_arn
 }
-output db_compare_sns_out {
-    value = module.tns_base.db_comp_sns_out_arn
+output sns_out {
+    value = module.tns_base.sns_out_arn
 }
-output db_compare_sqs_in {
-    value = module.tns_base.db_comp_sqs_in_arn
+output sqs_in {
+    value = module.tns_base.sqs_in_arn
 }
-output db_compare_sns_in {
-    value = module.tns_base.db_comp_sns_in_arn
-}
-
-#db_add/update
-output db_add_sns_in {
-    value = module.tns_base.db_add_sns_in_arn
-}
-output db_add_sns_out {
-    value = module.tns_base.db_add_sns_out_arn
-}
-output db_add_sqs_in {
-    value = module.tns_base.db_add_sqs_in_arn
-}
-output db_add_sqs_out {
-    value = module.tns_base.db_add_sqs_out_arn
-}
-
-#db_delete
-output db_delete_sns_in {
-    value = module.tns_base.db_delete_sns_in_arn
-}
-output db_delete_sns_out {
-    value = module.tns_base.db_delete_sns_out_arn
-}
-output db_delete_sqs_in {
-    value = module.tns_base.db_delete_sqs_in_arn
-}
-output db_delete_sqs_out {
-    value = module.tns_base.db_delete_sqs_out_arn
+output sns_in {
+    value = module.tns_base.sns_in_arn
 }
 
 output container {

@@ -2,11 +2,15 @@ import os
 import boto3
 import json
 
-from db_lambda import db_add_handler, db_comp_handler, db_delete_handler
-from db_lambda import get_entries_by_aoi
+import shutil
+import time
+import pytest
+
+from conftest import EventType
+from intersects_lambda import CloudConfig, handler, EXT_PATH
 
 
-def clear_sqs(sqs_arn, region):
+def clear_sqs(sqs_arn: str, region: str):
     sqs = boto3.client("sqs", region_name=region)
     queue_name = sqs_arn.split(":")[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -16,87 +20,115 @@ def clear_sqs(sqs_arn, region):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=10,
+            WaitTimeSeconds=2,
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
             for m in messages:
                 receipt_handle = m["ReceiptHandle"]
-                sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+                sqs.delete_message(
+                    QueueUrl=queue_url, ReceiptHandle=receipt_handle
+                )
         else:
             break
     return messages
 
 
-def test_comp(tf_output, comp_event, db_fill):
-    os.environ["AWS_REGION"] = tf_output["aws_region"]
-    os.environ["SNS_OUT_ARN"] = tf_output["db_compare_sns_out"]
-    os.environ["DB_TABLE_NAME"] = tf_output["table_name"]
-    print(tf_output["db_compare_sns_out"])
-
-    aois = db_comp_handler(comp_event, None)
-    assert len(aois) == 1
-    for aoi_res in aois:
-        attrs = aoi_res['MessageAttributes']
-        tiles = json.loads(attrs['tiles']['StringValue'])
-        assert len(tiles) == 1000
-
-    clear_sqs(tf_output["db_compare_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_compare_sqs_in"], tf_output["aws_region"])
-
-
-def test_add(tf_output, add_event, pk_and_model, h3_indices, config):
-    db_add_handler(add_event, None)
-    aoi_name = f'{pk_and_model}_0'
-
-    added_items = get_entries_by_aoi(aoi_name, config)
-    assert added_items["Count"] == 3
-    for i in added_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
-    clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
-
-
-def test_update(
-    tf_output,
-    db_fill,
-    update_event,
-    pk_and_model,
-    updated_h3_indices,
-    h3_indices,
-    config,
+def test_big(
+    region: str,
+    sqs_in: str,
+    sqs_out: str,
+    big_event: EventType,
+    big_aoi_fill: None,
+    env_vars: None
 ):
-    aoi_name = f'{pk_and_model}_0'
-    og_items = get_entries_by_aoi(aoi_name, config)
-    for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
-    # update
-    db_add_handler(update_event, None)
+    shutil.rmtree(EXT_PATH)
 
-    updated_items = get_entries_by_aoi(aoi_name, config)
-    assert updated_items["Count"] == 2
-    for i in updated_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in updated_h3_indices
-    clear_sqs(tf_output["db_add_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_add_sqs_in"], tf_output["aws_region"])
+    time1 = time.time()
+    aois = handler(big_event, None)
+    res_time = time.time() - time1
+    assert res_time < 500
+    assert len(aois)
+    for aoi_res in aois:
+        attrs = aoi_res["MessageAttributes"]
+
+        status = attrs["status"]["StringValue"]
+        assert status == "succeeded", json.dumps(attrs["error"])
+
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
 
-def test_delete(tf_output, db_fill, delete_event, pk_and_model, h3_indices, config):
-    aoi_name = f'{pk_and_model}_0'
-    og_items = get_entries_by_aoi(aoi_name, config)
-    assert og_items["Count"] == 3
-    for i in og_items["Items"]:
-        assert i["pk_and_model"]["S"] == aoi_name
-        assert i["h3_id"]["S"] in h3_indices
+def test_handler(
+    sqs_in: str,
+    sqs_out: str,
+    region: str,
+    bucket_name: str,
+    event: EventType,
+    config: CloudConfig,
+    aoi_fill: None,
+    env_vars: None
+):
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
 
-    db_delete_handler(delete_event, None)
+    aoi_res = handler(event, None)
+    assert len(aoi_res) == 1
 
-    deleted_items = get_entries_by_aoi(aoi_name, config)
-    assert deleted_items["Count"] == 0
-    assert len(deleted_items["Items"]) == 0
-    clear_sqs(tf_output["db_delete_sqs_out"], tf_output["aws_region"])
-    clear_sqs(tf_output["db_delete_sqs_in"], tf_output["aws_region"])
+    aoi_res = aoi_res[0]
+    attrs = aoi_res["MessageAttributes"]
+    assert "error" not in attrs.keys(), (
+        f"Error in messages: {attrs['error']['StringValue']}"
+    )
+
+    aois = json.loads(attrs["aoi_list"]["StringValue"])
+    assert len(aois) == 50
+    source_files = json.loads(attrs["source_files"]["StringValue"])
+    assert len(source_files) == 1
+    assert source_files[0] == f"s3://{bucket_name}/compare/geom.parquet"
+    s3_path = attrs["s3_output_path"]["StringValue"]
+
+    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
+    s3_aois = s3_info.pl().get_column("aois").to_list()
+    assert len(aois) == len(s3_aois)
+    assert set(s3_aois) == set(aois)
+
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
+
+
+def test_failures(sqs_out: str, region: str, env_vars: None):
+    clear_sqs(sqs_out, region)
+
+    def get_attrs(msg):
+        body = json.loads(msg[0]["Body"])
+        return body["MessageAttributes"]
+
+    # test bad event creation error catching
+    fake_event = {"Records": ["asdf"]}
+    with pytest.raises(Exception) as e1:
+        handler(fake_event, None)
+    assert "string indices must be integers" in str(e1)
+    msg1 = clear_sqs(sqs_out, region)
+    a1 = get_attrs(msg1)
+    assert a1["status"]["Value"] == "failed"
+    assert "string indices must be integers" in a1["error"]["Value"]
+
+    # test cloudconfig failure
+    s3_bucket = os.environ.pop("S3_BUCKET")
+    with pytest.raises(Exception) as e2:
+        handler(fake_event, None)
+    os.environ["S3_BUCKET"] = s3_bucket
+    assert "Required variable S3_BUCKET missing from environment" in str(e2)
+    msg2 = clear_sqs(sqs_out, region)
+    a2 = get_attrs(msg2)
+    assert a2["status"]["Value"] == "failed"
+    assert (
+        "Required variable S3_BUCKET missing from environment"
+        in a2["error"]["Value"]
+    )
+
+    clear_sqs(sqs_out, region)

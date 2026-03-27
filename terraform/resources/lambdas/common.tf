@@ -43,11 +43,7 @@ resource aws_iam_role_policy lambda_policy {
                 Sid = "PublishSnsMessage"
                 Effect = "Allow"
                 Action = "sns:Publish"
-                Resource = [
-                    "${var.db_comp_sns_out_arn}",
-                    "${var.db_add_sns_out_arn}",
-                    "${var.db_delete_sns_out_arn}"
-                ]
+                Resource = [ "${var.sns_out_arn}"]
             },
             {
                 Sid = "ReceiveSqsMessage"
@@ -59,26 +55,8 @@ resource aws_iam_role_policy lambda_policy {
                     "sqs:ChangeMessageVisibility",
                     "sqs:GetQueueUrl"
                 ]
-                Resource = [
-                    "${var.db_comp_sqs_in_arn}",
-                    "${var.db_add_sqs_in_arn}",
-                    "${var.db_delete_sqs_in_arn}",
-                ]
+                Resource = [ "${var.sqs_in_arn}" ]
 
-            },
-            {
-                Sid = "QueryDynamo"
-                Effect = "Allow"
-                Action = [
-                    "dynamodb:GetItem",
-                    "dynamodb:BatchGetItem",
-                    "dynamodb:Query",
-                    "dynamodb:PutItem",
-                    "dynamodb:BatchWriteItem",
-                    "dynamodb:DeleteItem",
-                    "dynamodb:Scan"
-                ]
-                Resource = "${var.table_arn}"
             },
             {
                 Sid = "LogCreation"
@@ -88,21 +66,30 @@ resource aws_iam_role_policy lambda_policy {
                     "logs:CreateLogStream",
                     "logs:PutLogEvents"
                 ]
-                Resource: "*"
+                Resource = "*"
             },
             {
                 Sid = "GetS3Object"
                 Effect = "Allow"
                 Action = [
-                    "s3:GetObject"
+                    "s3:GetObject",
+                    "s3:ListObject"
                 ],
                 Resource = [
-                    "arn:aws:s3:::${var.bucket_name}/add/*.parquet",
                     "arn:aws:s3:::${var.bucket_name}/compare/*.parquet",
-                    "arn:aws:s3:::${var.bucket_name}/delete/*.parquet"
+                    "arn:aws:s3:::${var.bucket_name}/subs/*.parquet"
+                ]
+            },
+            {
+                Sid = "WriteIntersects"
+                Effect = "Allow"
+                Action = [
+                    "s3:PutObject"
+                ],
+                Resource = [
+                    "arn:aws:s3:::${var.bucket_name}/intersects/*.parquet",
                 ]
             }
-
         ]
     })
 }

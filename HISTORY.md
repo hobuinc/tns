@@ -212,3 +212,120 @@ These changes were all driven by real deployment failures:
 - A full `terraform apply` completed successfully for `hobutnstest`.
 - An end-to-end smoke test uploaded `subs/subscriptions.parquet` and a `compare/smoke-*.parquet` input object, and the deployed stack produced a valid `intersects/*.parquet` output with the expected three AOI-to-tile matches for Alabama, Alaska, and Arizona.
 - The smoke objects were removed and the `hobutnstest` deployment was fully destroyed afterward, so the repository history now records both the successful deployment path and the completed teardown.
+
+## Stress Test
+
+## What was tested
+
+This session focused on measuring the deployed compare pipeline under larger live AWS workloads and then tightening the stack based on what the measurements showed. The tests were run against the `hobutnstest` environment in `us-west-2` with the CLI utility in [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py).
+
+The main live scenarios exercised were:
+
+- `100000` tiles with the default `--tiles-per-file 1000`
+- `1000000` tiles with the default `--tiles-per-file 1000`
+- `100000` tiles with `--tiles-per-file 10000`
+- `1000000` tiles with `--tiles-per-file 10000`
+- `100000` tiles with `--tiles-per-file 20000`
+- `1000000` tiles with `--tiles-per-file 20000`
+
+## What we found
+
+The earliest stress runs exposed two important truths:
+
+- The deployed Lambda was not failing or throttling under load.
+- The original stress utility expected the wrong success-message shape.
+
+CloudWatch showed that the Lambda had zero throttles and zero errors even when the stress utility timed out. The real issue was that the output queue carried one success message per processed batch, not one per AOI, while the old stress logic expected `file_count * state_count` success messages. That mismatch made healthy runs look like failures.
+
+Once the stress utility was updated to validate source-file coverage and output parquet correctness instead of raw AOI message count, the benchmark story became much clearer.
+
+## Stress benchmark results
+
+### Before optimization
+
+- `100000` tiles with `--tiles-per-file 1000`
+  - initial stress utility failed with `TimeoutError`
+  - root cause was incorrect message-count expectations, not Lambda failure
+- `1000000` tiles with `--tiles-per-file 1000`
+  - processing largely completed, but the run ended with an S3 cleanup failure
+  - root cause was `DeleteObjects` being called with more than 1000 keys in one request
+
+### Utility fixes made during investigation
+
+- Reworked [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py) so the stress scenario:
+  - tracks all uploaded compare parquet source URIs
+  - verifies those source URIs are represented across success messages
+  - validates each output parquet file
+  - cleans up output objects as part of the scenario
+- Fixed S3 cleanup to delete keys in chunks of 1000 instead of one oversized request
+
+### After optimization and utility fixes
+
+- `100000` tiles with `--tiles-per-file 10000`
+  - `success_messages`: `6`
+  - `duration_seconds`: `21.2`
+- `100000` tiles with `--tiles-per-file 20000`
+  - `success_messages`: `4`
+  - `duration_seconds`: `23.9`
+- `1000000` tiles with `--tiles-per-file 10000`
+  - `success_messages`: `59`
+  - `duration_seconds`: `66.81`
+- `1000000` tiles with `--tiles-per-file 20000`
+  - `success_messages`: `33`
+  - `duration_seconds`: `43.52`
+
+### What changed in response
+
+#### Batching and queue behavior
+
+The original Lambda event source mapping in [terraform/resources/lambdas/compare.tf](/Users/hobu/dev/git/tns/terraform/resources/lambdas/compare.tf) was configured with:
+
+- `batch_size = 30`
+- `maximum_batching_window_in_seconds = 20`
+
+That configuration favored relatively small Lambda batches and a longer queue wait before invocation. Based on the stress runs, the mapping was changed to:
+
+- `batch_size = 100`
+- `maximum_batching_window_in_seconds = 5`
+
+This reduces orchestration overhead by allowing each invocation to consume more SQS work while also shortening the delay before batches begin draining.
+
+#### Lambda sizing
+
+The Lambda memory size in [terraform/resources/lambdas/compare.tf](/Users/hobu/dev/git/tns/terraform/resources/lambdas/compare.tf) was increased from:
+
+- `3072 MB` to `5120 MB`
+
+That also increases available CPU, which is useful because the workload is not just network-bound. Each invocation is doing S3 I/O, schema validation, DuckDB geometry conversion, and the spatial join itself.
+
+#### Lambda runtime behavior
+
+The DuckDB/S3 runtime in [src/tns_core.py](/Users/hobu/dev/git/tns/src/tns_core.py) was optimized to reduce warm-invocation overhead:
+
+- DuckDB connections are now reused across warm Lambda invocations instead of recreated every time.
+- S3-backed parquet inputs are now cached locally by `URI + ETag`.
+
+That change especially helps the AOI parquet under `subs/subscriptions.parquet`, which is read repeatedly across many invocations during a stress run.
+
+### What the results suggest
+
+The `tiles-per-file` tuning has a workload-size crossover:
+
+- For `100000` tiles, `--tiles-per-file 10000` was slightly better than `20000`.
+- For `1000000` tiles, `--tiles-per-file 20000` was significantly better than `10000`.
+
+That implies two opposing costs:
+
+- more files increase S3/SNS/SQS/Lambda orchestration overhead
+- larger files increase per-batch DuckDB work
+
+At smaller scales, the extra compute per larger batch can outweigh the reduced orchestration. At larger scales, the orchestration savings become more important and larger files win.
+
+### Other opportunities to make things faster
+
+- Reuse the AOI dataset inside DuckDB as a temporary table during a warm container lifecycle instead of reparsing the parquet for every invocation.
+- Prevalidate or preproject compare parquet files earlier in the pipeline so Lambda does less repeated per-file setup work.
+- Add explicit Lambda reserved concurrency tuning so high-volume runs can scale out more predictably.
+- Consider dynamic `tiles-per-file` sizing in the deployment utility so small and large scenarios use different optimal object counts.
+- Reduce duplicated schema validation when multiple files are known to come from the same generator and format contract.
+- Capture CloudWatch benchmark summaries automatically from [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py) so throughput, average duration, and output-file counts are preserved with each run.

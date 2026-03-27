@@ -2,6 +2,7 @@ data/
 build/
 *.tfvars
 *.tfstate
+*.tfstate.backup
 .terraform/
 .duckdb_extensions/
 **/__pycache__/

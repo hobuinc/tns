@@ -18,6 +18,7 @@ import duckdb
 
 DEFAULT_EXTENSION_DIR = Path("/tmp/tns_duckdb_extensions")
 REQUIRED_COLUMNS = {"pk_and_model", "geometry"}
+_DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 
 
 class GeoParquetStore(Protocol):
@@ -63,14 +64,27 @@ class S3GeoParquetStore:
         self.s3 = s3_client
         self.working_directory = Path(working_directory)
         self.working_directory.mkdir(parents=True, exist_ok=True)
+        self._cached_objects: dict[str, tuple[str, str | None]] = {}
 
     def materialize_input(self, uri: str) -> str:
-        """Download an input parquet object from S3 into the working directory."""
+        """Download an input parquet object from S3 into the working directory.
+
+        Warm Lambda containers often process many batches back to back. We keep
+        a local copy keyed by URI and ETag so the AOI parquet and any repeated
+        inputs can be reused safely across invocations.
+        """
         bucket, key = parse_s3_uri(uri)
         filename = key.replace("/", "_")
         local_path = self.working_directory / filename
+        metadata = self.s3.head_object(Bucket=bucket, Key=key)
+        etag = metadata.get("ETag")
+        cached = self._cached_objects.get(uri)
+        if cached and cached[0] == etag and Path(cached[1]).exists():
+            return cached[1]
+
         body = self.s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         local_path.write_bytes(body)
+        self._cached_objects[uri] = (etag, str(local_path))
         return str(local_path)
 
     def persist_output(self, local_path: str, destination_uri: str) -> str:
@@ -102,7 +116,11 @@ def get_extension_directory() -> Path:
 
 
 def connect_duckdb(extension_directory: Path | None = None) -> duckdb.DuckDBPyConnection:
-    """Create a DuckDB connection with the spatial extension loaded."""
+    """Create or reuse a DuckDB connection with the spatial extension loaded."""
+    global _DUCKDB_CONNECTION
+    if _DUCKDB_CONNECTION is not None:
+        return _DUCKDB_CONNECTION
+
     ext_dir = extension_directory or get_extension_directory()
     ext_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +131,8 @@ def connect_duckdb(extension_directory: Path | None = None) -> duckdb.DuckDBPyCo
     except duckdb.Error:
         connection.execute("INSTALL spatial")
         connection.execute("LOAD spatial")
-    return connection
+    _DUCKDB_CONNECTION = connection
+    return _DUCKDB_CONNECTION
 
 
 def validate_parquet_schema(connection: duckdb.DuckDBPyConnection, path: str) -> None:
@@ -173,17 +192,17 @@ def compare_geoparquets(
 
     with TemporaryDirectory(prefix="tns-duckdb-") as temp_dir:
         local_output = str(Path(temp_dir) / "intersects.parquet")
-        with connect_duckdb() as connection:
-            validate_parquet_schema(connection, local_aoi_path)
-            for path in local_tile_paths:
-                validate_parquet_schema(connection, path)
+        connection = connect_duckdb()
+        validate_parquet_schema(connection, local_aoi_path)
+        for path in local_tile_paths:
+            validate_parquet_schema(connection, path)
 
-            query = build_intersection_query(local_aoi_path, local_tile_paths)
-            rows = connection.execute(query).fetchall()
-            connection.execute(
-                f"COPY ({query}) TO '{quote_sql_string(local_output)}' "
-                "(FORMAT PARQUET, COMPRESSION ZSTD)"
-            )
+        query = build_intersection_query(local_aoi_path, local_tile_paths)
+        rows = connection.execute(query).fetchall()
+        connection.execute(
+            f"COPY ({query}) TO '{quote_sql_string(local_output)}' "
+            "(FORMAT PARQUET, COMPRESSION ZSTD)"
+        )
 
         resolved_output_uri = store.persist_output(local_output, output_uri)
         matched_aois = [row[0] for row in rows]

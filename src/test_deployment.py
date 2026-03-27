@@ -266,10 +266,13 @@ def cleanup_s3_objects(bucket_name: str, keys: list[str], region: str) -> None:
     if not keys:
         return
     s3 = boto3.client("s3", region_name=region)
-    s3.delete_objects(
-        Bucket=bucket_name,
-        Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True},
-    )
+    unique_keys = list(dict.fromkeys(keys))
+    for start in range(0, len(unique_keys), 1000):
+        chunk = unique_keys[start : start + 1000]
+        s3.delete_objects(
+            Bucket=bucket_name,
+            Delete={"Objects": [{"Key": key} for key in chunk], "Quiet": True},
+        )
 
 
 def get_message_attributes(message: dict[str, Any]) -> dict[str, Any]:

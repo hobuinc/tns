@@ -117,11 +117,6 @@ def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
 
 
 def apply_compare(datapaths: list[str], config: CloudConfig):
-    name = uuid4()
-    base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
-    full_s3_path = f"s3://{base_s3_path}"
-
-    # create tracking variables
     sql = f"""
         SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
             FROM read_parquet("{config.aois_path}") AS aois
@@ -130,6 +125,18 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
             GROUP BY aois.pk_and_model
     """
     ddbi = config.con.sql(sql)
+    return ddbi
+
+
+def push_intersects(
+    ddbi: duckdb.DuckDBPyRelation,
+    datapaths: list[str],
+    config: CloudConfig
+):
+    name = uuid4()
+    base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
+    full_s3_path = f"s3://{base_s3_path}"
+
     aoi_list = ddbi.pl().get_column("aois").to_list()
     config.con.sql(
         f"COPY ddbi TO '{full_s3_path}' (FORMAT parquet, COMPRESSION zstd)"
@@ -182,7 +189,8 @@ def handler(event: dict[str, str], context):
                 data_paths = data_paths + get_data_paths(sqs_event)
 
             # process data paths together
-            sns_messages = apply_compare(data_paths, config)
+            intersects = apply_compare(data_paths, config)
+            sns_messages = push_intersects(intersects, data_paths, config)
             for msg in sns_messages:
                 config.sns.publish(TopicArn=config.sns_out_arn, **msg)
 

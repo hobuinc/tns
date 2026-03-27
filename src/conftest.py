@@ -151,22 +151,22 @@ def bucket_name(tf_output: dict[str, str]) -> Fixture[str]:
 
 
 @pytest.fixture(scope="function")
-def small_aois_path(test_dir: Path) -> Fixture[str]:
+def small_aois_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "state_aois.parquet"
 
 
 @pytest.fixture(scope="function")
-def small_tiles_path(test_dir: Path) -> Fixture[str]:
+def small_tiles_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "state_tiles.parquet"
 
 
 @pytest.fixture(scope="function")
-def big_aois_path(test_dir: Path) -> Fixture[str]:
+def big_aois_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "big_aoi_set.parquet"
 
 
 @pytest.fixture(scope="function")
-def big_tiles_path(test_dir: Path) -> Fixture[str]:
+def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "big_state_tiles.parquet"
 
 @pytest.fixture(scope="function")

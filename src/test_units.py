@@ -1,7 +1,29 @@
 import json
 from uuid import uuid4
+from pathlib import Path
+import polars_st as st
 
-from intersects_lambda import CloudConfig, get_pass_res, get_fail_res
+from intersects_lambda import CloudConfig, get_pass_res, get_fail_res, apply_compare
+
+
+def test_compare(small_tiles_path: Path, small_aois_path: Path):
+
+    # make config with fake values and adjust aois_path to local file
+    region = "us-west-2"
+    sns_out_arn = "fake-sns-arn"
+    bucket = "tns-fake-bucket"
+    config = CloudConfig(region, sns_out_arn, bucket)
+    config.aois_path = small_aois_path.as_posix()
+
+    # make comparison and confirm
+    datapaths = [small_tiles_path.as_posix()]
+    intersects = apply_compare(datapaths, config)
+    int_pl = intersects.pl().get_column("aois").to_list()
+    assert len(int_pl) == 50
+
+    local_gdf = st.read_file(small_aois_path).get_column("pk_and_model").to_list()
+
+    assert set(int_pl) == set(local_gdf)
 
 
 def test_fail_res(bucket_name: str):

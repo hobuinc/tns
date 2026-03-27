@@ -82,6 +82,59 @@ def sqs_listen(sqs_arn, region, retries=5):
     return messages
 
 
+def test_lambda(
+    region: str,
+    sqs_out: str,
+    sqs_in: str,
+    bucket_name: str,
+    small_tiles_path: Path,
+    small_aois_path: Path,
+    aoi_fill: None,
+    config: CloudConfig,
+):
+    # clear potential previous run data
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
+    key = "compare/geom.parquet"
+
+    filepath = f"s3://{bucket_name}/{key}"
+    states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
+
+    put_parquet(bucket_name, key, small_tiles_path, config)
+
+    messages = sqs_listen(sqs_out, region)
+    # if lambda is cold started it can take an extra cycle
+    if not messages:
+        messages = sqs_listen(sqs_out, region)
+    assert len(messages) == 1
+    m = messages[0]
+
+    message = json.loads(m["Body"])
+    attrs = message["MessageAttributes"]
+
+    status = attrs["status"]["Value"]
+    assert status == "succeeded", (
+        f"Error from SQS {message['MessageAttributes']['error']['Value']}"
+    )
+
+    msg_states = json.loads(attrs["aoi_list"]["Value"])
+    assert len(msg_states) == len(states)
+    assert set(msg_states) == set(states)
+
+    source_file = json.loads(attrs["source_files"]["Value"])
+    assert len(source_file) == 1
+    assert source_file[0] == filepath
+
+    s3_path = attrs["s3_output_path"]["Value"]
+    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
+    s3_aois = s3_info.pl().get_column("aois").to_list()
+    assert len(s3_aois) == len(states)
+    assert set(s3_aois) == set(states)
+
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
+
+
 pytest.mark.skip()
 def test_stress(
     config: CloudConfig,
@@ -185,55 +238,3 @@ def test_stress(
             msg_count += 1
     assert not failed
 
-
-def test_lambda(
-    region: str,
-    sqs_out: str,
-    sqs_in: str,
-    bucket_name: str,
-    small_tiles_path: Path,
-    small_aois_path: Path,
-    aoi_fill: None,
-    config: CloudConfig,
-):
-    # clear potential previous run data
-    clear_sqs(sqs_out, region)
-    clear_sqs(sqs_in, region)
-    key = "compare/geom.parquet"
-
-    filepath = f"s3://{bucket_name}/{key}"
-    states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
-
-    put_parquet(bucket_name, key, small_tiles_path, config)
-
-    messages = sqs_listen(sqs_out, region)
-    # if lambda is cold started it can take an extra cycle
-    if not messages:
-        messages = sqs_listen(sqs_out, region)
-    assert len(messages) == 1
-    m = messages[0]
-
-    message = json.loads(m["Body"])
-    attrs = message["MessageAttributes"]
-
-    status = attrs["status"]["Value"]
-    assert status == "succeeded", (
-        f"Error from SQS {message['MessageAttributes']['error']['Value']}"
-    )
-
-    msg_states = json.loads(attrs["aoi_list"]["Value"])
-    assert len(msg_states) == len(states)
-    assert set(msg_states) == set(states)
-
-    source_file = json.loads(attrs["source_files"]["Value"])
-    assert len(source_file) == 1
-    assert source_file[0] == filepath
-
-    s3_path = attrs["s3_output_path"]["Value"]
-    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-    s3_aois = s3_info.pl().get_column("aois").to_list()
-    assert len(s3_aois) == len(states)
-    assert set(s3_aois) == set(states)
-
-    clear_sqs(sqs_out, region)
-    clear_sqs(sqs_in, region)

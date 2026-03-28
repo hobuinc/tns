@@ -169,6 +169,7 @@ def big_aois_path(test_dir: Path) -> Fixture[Path]:
 def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "big_state_tiles.parquet"
 
+
 @pytest.fixture(scope="function")
 def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["AWS_REGION"] = tf_output["aws_region"]

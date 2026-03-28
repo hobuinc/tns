@@ -3,7 +3,7 @@ from math import ceil
 from pathlib import Path
 
 import time
-import datetime
+import datetime as dt
 
 import pytest
 import boto3
@@ -63,7 +63,7 @@ def sqs_listen(sqs_arn, region, retries=5):
             QueueUrl=queue_url,
             MessageAttributeNames=["All"],
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=10
+            WaitTimeSeconds=10,
         )
         if "Messages" in res.keys():
             messages = res["Messages"]
@@ -82,6 +82,56 @@ def sqs_listen(sqs_arn, region, retries=5):
     return messages
 
 
+def cleanup_s3_objects(bucket_name: str, keys: list[str], region: str) -> None:
+    """Delete uploaded S3 objects that were created for a scenario run."""
+    if not keys:
+        return
+    s3 = boto3.client("s3", region_name=region)
+    unique_keys = list(dict.fromkeys(keys))
+    for start in range(0, len(unique_keys), 1000):
+        chunk = unique_keys[start : start + 1000]
+        s3.delete_objects(
+            Bucket=bucket_name,
+            Delete={"Objects": [{"Key": key} for key in chunk], "Quiet": True},
+        )
+
+
+def summarize_lambda_metrics(
+    lambda_name: str,
+    region: str,
+    start_time: dt.datetime,
+    end_time: dt.datetime,
+) -> dict[str, list[float]]:
+    """Fetch simple Lambda CloudWatch metrics for the scenario window."""
+    cloudwatch = boto3.client("cloudwatch", region_name=region)
+    errors = cloudwatch.get_metric_statistics(
+        Namespace="AWS/Lambda",
+        MetricName="Errors",
+        Dimensions=[{"Name": "FunctionName", "Value": lambda_name}],
+        StartTime=start_time,
+        EndTime=end_time,
+        Period=60,
+        Statistics=["Sum"],
+    )
+    durations = cloudwatch.get_metric_statistics(
+        Namespace="AWS/Lambda",
+        MetricName="Duration",
+        Dimensions=[{"Name": "FunctionName", "Value": lambda_name}],
+        StartTime=start_time,
+        EndTime=end_time,
+        Period=60,
+        Statistics=["Average", "Sum"],
+    )
+    times = [point["Timestamp"] for point in durations["Datapoints"]]
+    return {
+        "errors": [point["Sum"] for point in errors["Datapoints"]],
+        "durations": [point["Average"] for point in durations["Datapoints"]],
+        "total_lambda_time": sum([point["Sum"] for point in durations["Datapoints"]]),
+        "start_time": min(times),
+        "end_time": max(times),
+    }
+
+
 def test_lambda(
     region: str,
     sqs_out: str,
@@ -92,6 +142,7 @@ def test_lambda(
     aoi_fill: None,
     config: CloudConfig,
 ):
+
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
@@ -143,7 +194,7 @@ def test_stress(
     sqs_out: str,
     sqs_in: str,
     big_aoi_fill: None,
-    big_tiles_path: Path
+    big_tiles_path: Path,
 ):
 
     # clear potential previous run data
@@ -154,17 +205,22 @@ def test_stress(
     batch_size = 1000
     count = ceil(tile_count / batch_size)
     print(f"creating {count} files.")
-    start = time.time()
+    start_time = dt.datetime.now(dt.timezone.utc)
+    key_set = set()
     for n in range(count):
         key = f"compare/stress_{n}.parquet"
+        key_set.add(key)
         put_parquet(bucket_name, key, big_tiles_path, config)
 
-    msg_count = 0
     failed = []
-    while True:
+    source_file_set = set()
+    s3_out_list = []
+    max_wait_time_s = max(600, 30 * (tile_count / 10**5))  # 5min per 1M
+    timeout = time.time()
+    while (
+        source_file_set != key_set and time.time() - timeout < max_wait_time_s
+    ):
         messages = sqs_listen(sqs_out, region, 10)
-        if not messages:
-            break
         for msg in messages:
             body = json.loads(msg["Body"])
 
@@ -172,13 +228,40 @@ def test_stress(
             status = attrs["status"]["Value"]
 
             if status == "failed":
-                failed.append(attrs)
+                err = attrs["error"]["Value"]
+                failed.append(err)
+            else:
+                s3_out = attrs["s3_output_path"]["Value"]
+                s3_out_list.append(s3_out)
 
-            msg_count += 1
+            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
+            source_file_set.update(msg_sfs)
 
     # seconds to remove from time approx:
-    # 10 retries * 10 seconds per * 20 seconds sqs lead
-    retry_time = 10 * 10 + 20
-    proc_time = time.time() - start - retry_time
-    print(f"Took around {proc_time} seconds.")
-    assert not failed
+    end_time = dt.datetime.now(dt.timezone.utc)
+    lambda_name = "tns_comp_lambda"
+
+
+    # collect and print test info
+    msgs = []
+    pass_fail = True
+    missing_sources = sorted(source_file_set.difference(key_set))
+    if not missing_sources:
+        pass_fail = False
+        msgs.append([f"Missing files due to timeout: {missing_sources}"])
+
+    metrics = summarize_lambda_metrics(
+        lambda_name, region, start_time, end_time
+    )
+    if any(metrics["errors"]):
+        pass_fail = False
+        msgs.append(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
+    if not failed:
+        pass_fail = False
+        msgs.append(f"Errors from SQS messages: {failed}")
+
+    average = sum(metrics["durations"]) / len(metrics["durations"])
+    print(f"Average durations: {average}")
+
+    if pass_fail:
+        raise AssertionError(json.dumps(msgs))

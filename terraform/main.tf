@@ -21,7 +21,7 @@ module tns_base {
 module tns_lambdas {
     # only make this in prod env #
     count = var.env == "prod" ? 1 : 0
-
+    env = var.env
     source = "./resources/lambdas"
     conda_env_name = var.conda_env_name
     sts_lambda_role_name = var.sts_lambda_role_name

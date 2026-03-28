@@ -5,6 +5,7 @@
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 cd $SCRIPT_DIR
 DOCKER_DIR="../terraform/resources/base/docker"
+DOCKER_HANDLER_DIR="$DOCKER_DIR/handlers"
 ARCH=amd64
 RIE_ARCH=x86_64
 REPO=tns_ecr
@@ -41,7 +42,7 @@ echo "$COMMAND"
 eval $COMMAND
 
 ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
-echo "Repository found ${ECR_REPONAME}"
+echo "Repository found $ECR_REPONAME"
 
 if [[ "$ECR_REPONAME" == "" ]]
 then
@@ -56,18 +57,18 @@ then
     exit 1
 fi
 
-cp -r "../src/." "$DOCKER_DIR/handlers/"
-cp -r "../src/." "$DOCKER_DIR/handlers/src/"
-echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
-docker buildx build --platform linux/${ARCH} \
+rm -rf "$DOCKER_HANDLER_DIR"
+cp -r "../src/." "$DOCKER_HANDLER_DIR"
+echo "Building image architecture $ARCH with image $LAMBDA_IMAGE"
+docker buildx build --platform linux/$ARCH \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
     --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
     --build-arg RIE_ARCH=$RIE_ARCH \
     --load \
-    -t ${FULL_CONTAINER_NAME} \
+    -t $FULL_CONTAINER_NAME \
     "$DOCKER_DIR/" \
     -f "$DOCKER_DIR/Dockerfile"
-docker push ${FULL_CONTAINER_NAME}
+docker push $FULL_CONTAINER_NAME
 
 pass_fail=$?
 if [[ $pass_fail == 0 ]]

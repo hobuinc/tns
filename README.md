@@ -73,6 +73,7 @@ The docker image can be built and deployed separately from Terraform.
 Once the container is built, copy the image uri into the ecr_image_uri variable in your terraform variables file.
 
 **note: You may need to first install QEMU by following the directions at https://docs.docker.com/build/building/multi-platform/#qemu.
+
 **note: You may also need to set env variable AWS_DEFAULT_REGION="aws_region".
 
 ### Initialize on EC2 instance
@@ -103,13 +104,13 @@ ecr_image_uri="copied_from_docker_init_output"
 
 All of these variables have a default, so if you don't set them, that's okay. If you set the `sts_lambda_role_name` variable, no role will be created, and the one that you have supplied will be used as the profile for the lambdas.
 
-Note that the permissions in `permissions.json` are permissions *without*:
+**note: that the permissions in `permissions.json` are permissions *without*:
 1. Lambda role creation
 2. S3 bucket creation
 3. S3 bucket modification
 4. ECR image creation
 
-Full permissions options:
+Full variable options:
 
 ```
 variable aws_region {

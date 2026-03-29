@@ -1,5 +1,6 @@
 data aws_region current { }
 data "aws_caller_identity" "current" { }
+
 variable ecr_image_uri {
     type=string
 }
@@ -8,7 +9,7 @@ variable env {
 }
 
 locals {
-    ecr_repository_name = "tns-${var.env}-ecr"
+    ecr_repository_name = "tns_ecr_${uuid()}"
     platform = "linux/amd64"
     image_tag = "amd64"
     rie_arch = "x86_64"
@@ -18,6 +19,7 @@ locals {
         "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.image_tag}" :
         "${var.ecr_image_uri}"
     )
+    ecr_script_path = "${path.module}/../../../scripts/docker_init"
 }
 
 resource aws_ecr_repository runner_ecr_repo {
@@ -38,26 +40,26 @@ resource null_resource ecr_image {
 
     provisioner "local-exec" {
         command = <<EOF
-                set -e
-                aws ecr get-login-password --region ${data.aws_region.current.name} \
-                | docker login --username AWS \
-                --password-stdin "https://${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com"
+            echo "Creating docker container"
+            set -e
+            aws ecr get-login-password --region ${data.aws_region.current.name} \
+            | docker login --username AWS \
+            --password-stdin "https://${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com"
 
 
-                rm -rf "${path.module}/docker/handlers"
-                mkdir -p "${path.module}/docker/handlers"
-                cp -r "${path.module}/../../../src/." "${path.module}/docker/handlers/"
-                echo "Building image platform ${local.platform} with image $LAMBDA_IMAGE"
-                docker buildx build --platform linux/${local.platform} \
-                    --no-cache \
-                    --build-arg LAMBDA_IMAGE="${local.lambda_base_image}" \
-                    --build-arg PYTHON_VERSION="${local.python_version}" \
-                    --build-arg RIE_ARCH=${local.rie_arch} \
-                    --load \
-                    -t ${local.image_uri} \
-                    "${path.module}/docker/" \
-                    -f "${path.module}/docker/Dockerfile"
-                docker push ${local.image_uri} -q
+            rm -rf "${path.module}/docker/handlers"
+            mkdir -p "${path.module}/docker/handlers"
+            cp -r "${path.module}/../../../src/." "${path.module}/docker/handlers/"
+            echo "Building image platform ${local.platform} with image $LAMBDA_IMAGE"
+            docker buildx build --platform ${local.platform} \
+                --build-arg LAMBDA_IMAGE="${local.lambda_base_image}" \
+                --build-arg PYTHON_VERSION="${local.python_version}" \
+                --build-arg RIE_ARCH=${local.rie_arch} \
+                --load \
+                -t ${local.image_uri} \
+                "${path.module}/docker/" \
+                -f "${path.module}/docker/Dockerfile"
+            docker push ${local.image_uri}
             EOF
         }
 }
@@ -65,11 +67,13 @@ resource null_resource ecr_image {
 
 data aws_ecr_image runner_image {
     count = var.ecr_image_uri == "" ? 1 : 0
-    repository_name = aws_ecr_repository.runner_ecr_repo[0].name
-    image_tag = local.arch
+    repository_name = local.ecr_repository_name
+    image_tag = local.image_tag
     depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
 }
 
 output image_uri {
-    value = local.image_uri
+    value = (var.ecr_image_uri == "" ?
+        data.aws_ecr_image.runner_image[0].image_uri : local.image_uri)
+
 }

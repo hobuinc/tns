@@ -1,6 +1,25 @@
 #!/bin/bash
 
-#### Docker Initialization
+# This script creates the lambda docker image locally and pushes to an ECR in
+# AWS. If the ECR Repo hasn't yet been created, this script will create it for
+# you. Use the printed image uri in the terraform variables to skip ECR and
+# image creation there.
+
+set -e
+if [[ "$1" == "--help" ]]
+then
+    echo "Usage: ./docker_init [REPO]"
+    exit 0
+elif [[ "$1" == "help" ]]
+then
+    echo "Usage: ./docker_init [REPO]"
+    exit 0
+elif [[ "$1" != "" ]]
+then
+    REPO=$1
+else
+    REPO=tns_ecr
+fi
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 cd $SCRIPT_DIR
@@ -8,17 +27,12 @@ DOCKER_DIR="../terraform/resources/base/docker"
 DOCKER_HANDLER_DIR="$DOCKER_DIR/handlers"
 ARCH=amd64
 RIE_ARCH=x86_64
-REPO=tns_ecr
 PYTHON_VERSION=3.13
 LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
 
-set -e
-CONTAINER_NAME="$1"
-if [[ "$CONTAINER_NAME" == "" ]]
-then
-    CONTAINER_NAME="$REPO:$ARCH"
-    echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
-fi
+
+CONTAINER_NAME="$REPO:$ARCH"
+echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
 
 REGION=$AWS_DEFAULT_REGION
 if [[ "$REGION" == "" ]]

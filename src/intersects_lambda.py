@@ -1,3 +1,11 @@
+"""
+TNS Lambda handler that processes the SNS->SQS Event messages created as a
+result of a Tile Parquet being pushed to S3.
+
+This module uses DuckDB to find the intersect between AOI Subscriptions and
+ingested Tiles and output the results to S3 and to SNS.
+"""
+
 import json
 import os
 
@@ -13,6 +21,7 @@ _DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 
 
 class CloudConfig:
+    """Coordinate AWS and DuckDB connections and associated information. """
     def __init__(self, region, sns_out_arn, bucket):
         self.region = region
         self.sns_out_arn = sns_out_arn
@@ -45,6 +54,7 @@ class CloudConfig:
 
 
 def delete_sqs_message(e, config: CloudConfig):
+    """Remove Message from SQS Queue."""
     source_arn = e["eventSourceARN"]
     queue_name = source_arn.split(":")[-1]
     queue_url = config.sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -55,6 +65,7 @@ def delete_sqs_message(e, config: CloudConfig):
 
 
 def get_data_paths(sqs_event):
+    """Process SQS events and return a list of paths to Tile Parquet in S3."""
     body = json.loads(sqs_event["body"])
     message = json.loads(body["Message"])
     # skip TestEvent
@@ -72,6 +83,8 @@ def get_data_paths(sqs_event):
 def get_pass_res(
     name: UUID, dpaths: list[str], aois: list[str], output_path: str
 ):
+    """Create SNS success message information on impacted AOIS. If the message
+    is too large, recursively split the AOI impact list until it fits."""
     attrs = {
         "source_files": {
             "DataType": "String",
@@ -100,6 +113,7 @@ def get_pass_res(
 
 
 def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
+    """Create SNS failed message with error information and source files."""
     res = {
         "MessageAttributes": {
             "source_files": {
@@ -116,6 +130,8 @@ def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
 
 
 def apply_compare(datapaths: list[str], config: CloudConfig):
+    """Perform DuckDB Intersect on Tiles and Subscriptions and return DuckDB
+    Relation object."""
     sql = f"""
         SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
             FROM read_parquet("{config.aois_path}") AS aois
@@ -132,6 +148,7 @@ def push_intersects(
     datapaths: list[str],
     config: CloudConfig
 ):
+    """Push intersect results as a parquet file to S3."""
     name = uuid4()
     base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
     full_s3_path = f"s3://{base_s3_path}"
@@ -145,6 +162,8 @@ def push_intersects(
 
 
 def get_env_vars(var_name: str):
+    """Handle fetching requirend environment variables and crafting error
+    messages if they're missing."""
     env_keys = os.environ.keys()
 
     if var_name in env_keys:
@@ -156,16 +175,11 @@ def get_env_vars(var_name: str):
         )
 
 
-# Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
-# AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
-# have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
-# {TileModel}_{TilePK}. All aois will come in in EPSG:4326
 def handler(event: dict[str, str], context):
+    """Base Lambda handler method which coordinates SQS message processing and
+    SNS responses in case of errors."""
     sns_out = get_env_vars("SNS_OUT_ARN")
     region = get_env_vars("AWS_REGION")
-
-    # catch any config errors that are created. Can only push errors to sns
-    # if we successfully got the environment variables beforehand
 
     try:
         bucket = get_env_vars("S3_BUCKET")

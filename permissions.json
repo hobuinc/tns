@@ -21,25 +21,9 @@
 			],
 			"Effect": "Allow",
 			"Resource": [
-				"arn:aws:sns:${aws_region}:${account_id}:tns_db_add_sns_input",
-				"arn:aws:sns:${aws_region}:${account_id}:tns_db_add_sns_output",
-				"arn:aws:sns:${aws_region}:${account_id}:tns_db_delete_input",
-				"arn:aws:sns:${aws_region}:${account_id}:tns_db_delete_sns_output",
 				"arn:aws:sns:${aws_region}:${account_id}:tns_db_comp_sns_input",
 				"arn:aws:sns:${aws_region}:${account_id}:tns_db_comp_sns_output"
 			]
-		},
-		{
-			"Action": [
-				"dynamodb:CreateTable",
-				"dynamodb:DescribeTable",
-				"dynamodb:DescribeContinuousBackups",
-				"dynamodb:DescribeTimeToLive",
-				"dynamodb:DeleteTable",
-				"dynamodb:ListTagsOfResource"
-			],
-			"Effect": "Allow",
-			"Resource": "arn:aws:dynamodb:${aws_region}:${account_id}:table/tns_geodata_table"
 		},
 		{
 			"Action": [
@@ -52,18 +36,10 @@
 			],
 			"Effect": "Allow",
 			"Resource": [
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_sqs_input",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_sqs_output",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_dlq_in",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_add_dlq_out",
 				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_sqs_input",
 				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_sqs_output",
 				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_dlq_in",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_dlq_out",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_sqs_input",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_sqs_output",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_dlq_in",
-				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_delete_dlq_out"
+				"arn:aws:sqs:${aws_region}:${account_id}:tns_db_comp_dlq_out"
 			]
 		},
 		{
@@ -76,8 +52,6 @@
 			],
 			"Effect": "Allow",
 			"Resource": [
-				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_db_add_lambda",
-				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_db_delete_lambda",
 				"arn:aws:lambda:${aws_region}:${account_id}:function:tns_comp_lambda"
 			]
 		},

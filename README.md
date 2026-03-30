@@ -1,7 +1,7 @@
 # Tile Notification System (TNS)
 
 ## Overview
-The Tile Notification System (TNS) creates a group of cloud architecture resources meant to manage a database of Areas of Interest (AOIs) with corresponding global index codes, in this case using [Uber's H3](https://www.uber.com/blog/h3/), which will allow the users to automatically compare geometries against those present in the database and detect overlaps.
+The Tile Notification System (TNS) creates a group of cloud architecture resources that respond to parquet files being pushed to a S3 bucket. These parquet files represent the latest Tiles to be ingested by GRiD and their associated geometries. TNS will then find the intersection between these Tiles and a set of AOI Subscriptions and return the results via S3.
 
 TNS should be deployable on an AWS EC2 instance with no internet connection (beside the ability to interact with AWS API), given it has the correct permissions.
 

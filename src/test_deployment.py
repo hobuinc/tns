@@ -196,7 +196,7 @@ def test_many_small_tiles(
     region: str,
     sqs_out: str,
     sqs_in: str,
-    # aoi_fill: None,
+    aoi_fill: None,
     cities_path: Path,
 ):
     """

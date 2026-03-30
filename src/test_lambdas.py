@@ -42,6 +42,7 @@ def test_big(
     big_aoi_fill: None,
     env_vars: None
 ):
+    """Test lambda function's ability to coordinate large amounts of data."""
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
@@ -72,6 +73,10 @@ def test_handler(
     aoi_fill: None,
     env_vars: None
 ):
+    """
+    Test that lambda function is correctly interacting with supporting
+    resources like SQS and S3.
+    """
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
@@ -101,6 +106,10 @@ def test_handler(
 
 
 def test_failures(sqs_out: str, region: str, env_vars: None):
+    """
+    Test that lambda function fails in expected ways and advertises those
+    errors in the correct way via SQS.
+    """
     clear_sqs(sqs_out, region)
 
     def get_attrs(msg):

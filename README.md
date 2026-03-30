@@ -23,18 +23,34 @@ TNS is split into 4 sections of operation:
 
 #### From a system with internet access
 1. Install dependencies using conda.
+
     ```
     conda env create -f environment.yaml
     conda activate tns
     ```
+
 2. Run the TNS Terraform init script.
+
     ```
     ./scripts/init
     ```
+
 3. If deploying docker container separate from Terraform, run docker init script and copy ecr_image_uri output to terraform variables.
+
     ```
     ./scripts/docker_init $REPO
     ```
+
+4. Duplicate local TNS code to the remote instance with options like `rsync` or by copying to an s3 bucket first `aws s3 sync`.
+
+    ```
+    aws s3 sync ./ s3://{your_bucket}/tns
+    ```
+
+    ```
+    {rsync call here}
+    ```
+
 
 #### From the system without internet access
 1. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.

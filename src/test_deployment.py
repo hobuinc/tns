@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 from math import ceil
 from pathlib import Path
@@ -125,7 +126,7 @@ def summarize_lambda_metrics(
     times = [point["Timestamp"] for point in durations["Datapoints"]]
     return {
         "errors": [point["Sum"] for point in errors["Datapoints"]],
-        "durations": [point["Average"] for point in durations["Datapoints"]],
+        "avg_durations": [point["Average"] for point in durations["Datapoints"]],
         "total_lambda_time": sum([point["Sum"] for point in durations["Datapoints"]]),
         "start_time": min(times),
         "end_time": max(times),
@@ -142,7 +143,10 @@ def test_lambda(
     aoi_fill: None,
     config: CloudConfig,
 ):
-
+    """
+    Test full process by pushing a file and checking that the response from the
+    lambda via SQS matches what's expected.
+    """
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
@@ -185,6 +189,106 @@ def test_lambda(
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
+pytest.mark.skip()
+def test_many_small_tiles(
+    config: CloudConfig,
+    bucket_name: str,
+    region: str,
+    sqs_out: str,
+    sqs_in: str,
+    # aoi_fill: None,
+    cities_path: Path,
+):
+    """
+    Test small file performance by pushing files with 1 tile in them and
+    querying SQS/Cloudwatch for results.
+    """
+
+    # clear potential previous run data
+    clear_sqs(sqs_out, region)
+    clear_sqs(sqs_in, region)
+
+    count = 200
+    start_time = dt.datetime.now(dt.timezone.utc)
+    key_set = set()
+    cleanup_list = []
+    cities_cmd = f"""
+        select id as pk_and_model, geometry
+            from read_parquet('{cities_path.as_posix()}')
+    """
+
+    cities = config.con.execute(cities_cmd).fetch_df()
+    def write_one(city, vsis_path):
+        gdf = st.GeoDataFrame(city, geometry_format="wkb", strict=True)
+        gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+        gdf.st.write_file(path=vsis_path, driver="PARQUET", compression='zstd')
+
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for idx in range(count):
+            city = cities.loc[idx:idx]
+            key = f"compare/one_tile_{idx}.parquet"
+            vsis_path = f'/vsis3/{bucket_name}/{key}'
+            s3_key = f's3://{bucket_name}/{key}'
+            key_set.add(s3_key)
+            cleanup_list.append(key)
+            executor.submit(write_one, city, vsis_path)
+
+    failed = []
+    source_file_set = set()
+    s3_out_list = []
+    max_wait_time_s = 300  # 5min per 1M
+    timeout = time.time()
+    while (
+        source_file_set != key_set and time.time() - timeout < max_wait_time_s
+    ):
+        messages = sqs_listen(sqs_out, region, 10)
+        for msg in messages:
+            body = json.loads(msg["Body"])
+
+            attrs = body["MessageAttributes"]
+            status = attrs["status"]["Value"]
+
+            if status == "failed":
+                err = attrs["error"]["Value"]
+                failed.append(err)
+            else:
+                s3_out = attrs["s3_output_path"]["Value"]
+                s3_out_list.append(s3_out)
+                cleanup_list.append(s3_out)
+
+            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
+            source_file_set.update(msg_sfs)
+
+    # seconds to remove from time approx:
+    end_time = dt.datetime.now(dt.timezone.utc)
+    lambda_name = "tns_comp_lambda"
+
+    # collect and print test info
+    msgs = []
+    pass_fail = True
+    missing_sources = sorted(source_file_set.difference(key_set))
+    if missing_sources:
+        pass_fail = False
+        msgs.append([f"Missing files due to timeout: {missing_sources}"])
+
+    metrics = summarize_lambda_metrics(
+        lambda_name, region, start_time, end_time
+    )
+    if any(metrics["errors"]):
+        pass_fail = False
+        msgs.append(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
+    if failed:
+        pass_fail = False
+        msgs.append(f"Errors from SQS messages: {failed}")
+
+    print(metrics)
+    cleanup_s3_objects(bucket_name, cleanup_list, region)
+
+    if not pass_fail:
+        raise AssertionError(json.dumps(msgs))
+
+
 
 pytest.mark.skip()
 def test_stress(
@@ -196,7 +300,10 @@ def test_stress(
     big_aoi_fill: None,
     big_tiles_path: Path,
 ):
-
+    """
+    Stress test the environment by sending 1k files with 1k tiles in them and
+    querying SQS/Cloudwatch for results.
+    """
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
@@ -207,9 +314,11 @@ def test_stress(
     print(f"creating {count} files.")
     start_time = dt.datetime.now(dt.timezone.utc)
     key_set = set()
+    cleanup_list = []
     for n in range(count):
         key = f"compare/stress_{n}.parquet"
-        key_set.add(key)
+        cleanup_list.append(key)
+        key_set.add(f's3://{bucket_name}/{key}')
         put_parquet(bucket_name, key, big_tiles_path, config)
 
     failed = []
@@ -233,6 +342,7 @@ def test_stress(
             else:
                 s3_out = attrs["s3_output_path"]["Value"]
                 s3_out_list.append(s3_out)
+                cleanup_list.append(s3_out)
 
             msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
             source_file_set.update(msg_sfs)
@@ -246,7 +356,7 @@ def test_stress(
     msgs = []
     pass_fail = True
     missing_sources = sorted(source_file_set.difference(key_set))
-    if not missing_sources:
+    if missing_sources:
         pass_fail = False
         msgs.append([f"Missing files due to timeout: {missing_sources}"])
 
@@ -256,12 +366,14 @@ def test_stress(
     if any(metrics["errors"]):
         pass_fail = False
         msgs.append(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
-    if not failed:
+    if failed:
         pass_fail = False
         msgs.append(f"Errors from SQS messages: {failed}")
 
-    average = sum(metrics["durations"]) / len(metrics["durations"])
-    print(f"Average durations: {average}")
+    print(json.dumps(metrics, indent=2))
 
-    if pass_fail:
+    cleanup_s3_objects(bucket_name, cleanup_list, region)
+
+    if not pass_fail:
         raise AssertionError(json.dumps(msgs))
+

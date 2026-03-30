@@ -12,6 +12,7 @@ from intersects_lambda import (
 
 
 def test_compare(small_tiles_path: Path, small_aois_path: Path):
+    """Test that apply_compare returns the correct intersections."""
 
     # make config with fake values and adjust aois_path to local file
     region = "us-west-2"
@@ -34,6 +35,7 @@ def test_compare(small_tiles_path: Path, small_aois_path: Path):
 
 
 def test_fail_res(bucket_name: str):
+    """Test that failure responses are returned in expected structures."""
     name = uuid4()
     paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
     err_str = "TypeError('You passed in the wrong type, fix that.')"
@@ -52,6 +54,10 @@ def test_fail_res(bucket_name: str):
 
 
 def test_pass_res(bucket_name: str):
+    """
+    Test that passing responses are returned in expected structures, and that
+    when responses are too large from lists of AOIs those responses are split.
+    """
     paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
 
     # basic
@@ -72,6 +78,7 @@ def test_pass_res(bucket_name: str):
 
 
 def test_config():
+    """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
     region = "us-east-1"

@@ -169,6 +169,14 @@ def big_aois_path(test_dir: Path) -> Fixture[Path]:
 def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     yield test_dir / "data" / "big_state_tiles.parquet"
 
+@pytest.fixture(scope="function")
+def one_tile_path(test_dir: Path) -> Fixture[Path]:
+    yield test_dir / "data" / "one_tile.parquet"
+
+@pytest.fixture(scope="function")
+def cities_path(test_dir: Path) -> Fixture[Path]:
+    yield test_dir / "data" / "us_cities.parquet"
+
 
 @pytest.fixture(scope="function")
 def env_vars(tf_output: dict[str, str]) -> None:

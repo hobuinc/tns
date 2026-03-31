@@ -132,8 +132,9 @@ def summarize_lambda_metrics(
         "end_time": max(times),
     }
 
-
+@pytest.mark.parametrize('env_type',('prod',), indirect=True)
 def test_lambda(
+    env_type,
     region: str,
     sqs_out: str,
     sqs_in: str,
@@ -147,6 +148,7 @@ def test_lambda(
     Test full process by pushing a file and checking that the response from the
     lambda via SQS matches what's expected.
     """
+
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
@@ -190,7 +192,9 @@ def test_lambda(
     clear_sqs(sqs_in, region)
 
 @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.parametrize('env_type',('prod',), indirect=True)
 def test_many_small_tiles(
+    env_type,
     config: CloudConfig,
     bucket_name: str,
     region: str,
@@ -291,7 +295,9 @@ def test_many_small_tiles(
 
 
 @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.parametrize('env_type',('prod',), indirect=True)
 def test_stress(
+    env_type,
     config: CloudConfig,
     bucket_name: str,
     region: str,

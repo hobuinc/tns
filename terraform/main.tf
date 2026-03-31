@@ -91,6 +91,9 @@ variable ecr_image_uri {
 ##            Outputs              ##
 #####################################
 
+output env {
+    value = var.env
+}
 output aws_region {
     value = var.aws_region
 }

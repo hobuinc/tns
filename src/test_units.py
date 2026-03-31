@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 from pathlib import Path
 import polars_st as st
+import pytest
 
 from intersects_lambda import (
     CloudConfig,
@@ -11,7 +12,8 @@ from intersects_lambda import (
 )
 
 
-def test_compare(small_tiles_path: Path, small_aois_path: Path):
+@pytest.mark.parametrize('env_type',('unit',), indirect=True)
+def test_compare(env_type, small_tiles_path: Path, small_aois_path: Path):
     """Test that apply_compare returns the correct intersections."""
 
     # make config with fake values and adjust aois_path to local file
@@ -34,10 +36,11 @@ def test_compare(small_tiles_path: Path, small_aois_path: Path):
     assert set(int_pl) == set(local_gdf)
 
 
-def test_fail_res(bucket_name: str):
+@pytest.mark.parametrize('env_type',('unit',), indirect=True)
+def test_fail_res(env_type):
     """Test that failure responses are returned in expected structures."""
     name = uuid4()
-    paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
+    paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
     err_str = "TypeError('You passed in the wrong type, fix that.')"
 
     msg = get_fail_res(name=name, dpaths=paths, err_str=err_str)
@@ -53,12 +56,13 @@ def test_fail_res(bucket_name: str):
     assert json.loads(attrs["source_files"]["StringValue"]) == paths
 
 
-def test_pass_res(bucket_name: str):
+@pytest.mark.parametrize('env_type',('unit',), indirect=True)
+def test_pass_res(env_type):
     """
     Test that passing responses are returned in expected structures, and that
     when responses are too large from lists of AOIs those responses are split.
     """
-    paths = [f"s3://{bucket_name}/tns-sample-path/key.parquet"]
+    paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
 
     # basic
     pass_list = ["0123456789" for n in range(15000)]
@@ -77,7 +81,8 @@ def test_pass_res(bucket_name: str):
     assert all(types)
 
 
-def test_config():
+@pytest.mark.parametrize('env_type',('unit',), indirect=True)
+def test_config(env_type):
     """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those

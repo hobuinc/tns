@@ -35,10 +35,13 @@ TNS is split into 4 sections of operation:
     ./scripts/init
     ```
 
-3. If deploying docker container separate from Terraform, run docker init script and copy ecr_image_uri output to terraform variables.
+3. If deploying docker container *separate* from Terraform, run the `docker_init` script and copy `ecr_image_uri` output to terraform variables. The default value for REPO in `docker_init` will be `tns_ecr`, which would use (or create if it's not made yet) an ECR container named `{account_id}.dkr.ecr.{aws_region}.amazonaws.com/tns_ecr:amd64`.
 
     ```
+    export DEFAULT_AWS_REGION="your_region"
+    REPO="desired_repo_name"
     ./scripts/docker_init $REPO
+    # copy output to ecr_image_uri in your terraform variables file
     ```
 
 4. Duplicate local TNS code to the remote instance by copying to S3 locally.
@@ -211,41 +214,33 @@ To destroy the cloud resources, run the `down` script with the path to your vari
 ### Testing
 
 There are three available ways to run tests on the infrastructure made from this
-1. With unit tests, which require no resources deployed and is the fasted repl.
+1. With unit tests, which require no resources are deployed and is the fasted repl.
 2. With env=test, which tests the interaction between SNS/SQS and you can still develop the lambda code locally.
 3. With env=prod, which is a full integration test, making sure that a deployment is fully operational.
 
-#### Unit tests
-To run the unit tests, you can you use `pytest` on `src/test_units.py`.
+In each of these scenarios, you can simply run `pytest` from the root directory and the correct tests will be selected based on the environment.
 
-```
-pytest src/test_units.py
-```
+#### Unit tests
+Unit tests are only run when there is no terraform deployment active.
 
 #### Dev Mode
-To run in development mode, you will create a base set of cloud resources needed to tie things together, and then you can run the file `test_lambdas.py` with `pytest`. These tests will grab the resource names from the terraform outputs, and will populate `pytest` fixtures with those values.
+To run in development mode, you will create a base set of cloud resources needed to tie things together, and then you can run `pytest`. This set of tests will be using the local lambda file, allowing for you to develop those functions, while also pushing files to `S3`, prompting `SNS` and `SQS` messages. We'll then grab those and create an event from them, allowing this lambda to effectively act as if it were deployed.
 
 ```
 ### VAR_FILE contents
 # env="test"
 # aws_region="us-east-1"
-# sts_lambda_role_name="" # this is the default
-
-./scripts/up $VAR_FILE # deploy the dev environment
-pytest src/test_lambdas.py # test against that dev environment
+# sts_lambda_role_name=""
 ```
 
 #### Deployed Mode
-For deployment mode, you'll be deploying the full set of architecture, and then using the outputs from `terraform` to populate the pytest fixtures again. This time though, the tests will send a message to the starting `SNS Topic` and will listen to the outgoing `SQS Queue` for a response, testing the response for what it expects.
+For deployment mode, you'll be deploying the full set of architecture and using the outputs from `terraform` to populate the pytest fixtures again. This time though, the tests will push files to `S3`, prompting a message to the starting `SNS Topic`, and will listen to the outgoing `SQS Queue` for a response, testing the response for what it expects.
 
 ```
 ### VAR_FILE contents
-# env="test"
-# aws_region="us-east-1"
-# sts_lambda_role_name="TNS_Testing_Role" # this is the default
-# s3_bucket_name="grid-dev-tns" # specify a custom bucket name as needed
-# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.us-east-1.amazonaws.com/tns_ecr:amd64" # specify ecr_image_uri if you built the image outside of terraform using the docker_init script
-
-./scripts/up $VAR_FILE # deploy the production environment
-pytest src/test_deployment.py
+# env="prod"
+# aws_region="your_region"
+# sts_lambda_role_name="your_role" # this is the default
+# s3_bucket_name="your_bucket" # specify a custom bucket name as needed
+# ecr_image_uri="ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/REPO:amd64"
 ```

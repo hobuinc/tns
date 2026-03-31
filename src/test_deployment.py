@@ -189,7 +189,7 @@ def test_lambda(
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
-pytest.mark.skip()
+@pytest.mark.skip(reason="Manually run only.")
 def test_many_small_tiles(
     config: CloudConfig,
     bucket_name: str,
@@ -267,7 +267,7 @@ def test_many_small_tiles(
     # collect and print test info
     msgs = []
     pass_fail = True
-    missing_sources = sorted(source_file_set.difference(key_set))
+    missing_sources = sorted(key_set.difference(source_file_set))
     if missing_sources:
         pass_fail = False
         msgs.append([f"Missing files due to timeout: {missing_sources}"])
@@ -290,7 +290,7 @@ def test_many_small_tiles(
 
 
 
-pytest.mark.skip()
+@pytest.mark.skip(reason="Manually run only.")
 def test_stress(
     config: CloudConfig,
     bucket_name: str,
@@ -355,7 +355,7 @@ def test_stress(
     # collect and print test info
     msgs = []
     pass_fail = True
-    missing_sources = sorted(source_file_set.difference(key_set))
+    missing_sources = sorted(key_set.difference(source_file_set))
     if missing_sources:
         pass_fail = False
         msgs.append([f"Missing files due to timeout: {missing_sources}"])

@@ -21,7 +21,8 @@ _DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 
 
 class CloudConfig:
-    """Coordinate AWS and DuckDB connections and associated information. """
+    """Coordinate AWS and DuckDB connections and associated information."""
+
     def __init__(self, region, sns_out_arn, bucket):
         self.region = region
         self.sns_out_arn = sns_out_arn
@@ -48,8 +49,8 @@ class CloudConfig:
             """
             con.execute(ex_str)
 
-            __DUCKDB_CONNECTION = con
-        self.con = __DUCKDB_CONNECTION
+            _DUCKDB_CONNECTION = con
+        self.con = _DUCKDB_CONNECTION
         self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
 
 
@@ -90,7 +91,7 @@ def get_pass_res(
             "DataType": "String",
             "StringValue": json.dumps(dpaths),
         },
-        "aoi_list": { # TODO
+        "aoi_list": {  # TODO
             "DataType": "String",
             "StringValue": json.dumps(aois),
         },
@@ -99,11 +100,7 @@ def get_pass_res(
     }
     message = f"{name}"
 
-    res = {
-        "MessageAttributes": attrs,
-        "Message": message,
-        "MessageGroupId": "compare",
-    }
+    res = {"MessageAttributes": attrs, "Message": message}
     if json.dumps(res).encode().__sizeof__() > MAX_MSG_BYTES:
         split = int(len(aois) / 2)
         res1 = get_pass_res(name, dpaths, aois[:split], output_path)
@@ -124,7 +121,6 @@ def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
             "error": {"DataType": "String", "StringValue": err_str},
         },
         "Message": f"{name}",
-        "MessageGroupId": "compare",
     }
     return res
 
@@ -144,9 +140,7 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
 
 
 def push_intersects(
-    ddbi: duckdb.DuckDBPyRelation,
-    datapaths: list[str],
-    config: CloudConfig
+    ddbi: duckdb.DuckDBPyRelation, datapaths: list[str], config: CloudConfig
 ):
     """Push intersect results as a parquet file to S3."""
     name = uuid4()

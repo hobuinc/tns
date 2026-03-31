@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CMD=(terraform apply)
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+# Run Terraform from the repo-managed Pixi environment instead of a pre-activated shell.
+source "$SCRIPT_DIR/pixi_env"
+
+CMD=(tns_pixi_exec terraform apply)
 
 VAR_PATH="${1:-}"
 if [[ -n "${VAR_PATH}" ]]; then
@@ -14,10 +18,6 @@ if (( $# > 0 )); then
     CMD+=("$@")
 fi
 printf '%s\n' "${CMD[*]}"
-
-SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
-
-echo "$SCRIPT_DIR"
 
 cd "$SCRIPT_DIR/../terraform"
 "${CMD[@]}"

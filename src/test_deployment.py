@@ -323,13 +323,19 @@ def summarize_lambda_metrics(
     }
     summary: dict[str, Any] = {}
 
-    # Query a slightly wider time window and allow for metric publication lag.
-    query_start = start_time - dt.timedelta(minutes=1)
-    query_end = end_time + dt.timedelta(minutes=1)
+    # Query a wider minute-aligned window and allow for CloudWatch publication
+    # lag. Short scenarios can finish before invocation and duration datapoints
+    # are visible even though concurrency has already appeared.
+    query_start = (start_time - dt.timedelta(minutes=2)).replace(
+        second=0, microsecond=0
+    )
+    query_end = (end_time + dt.timedelta(minutes=3)).replace(second=0, microsecond=0)
+    if query_end <= query_start:
+        query_end = query_start + dt.timedelta(minutes=1)
 
     latest_points: dict[str, list[float]] = {key: [] for key in metric_requests}
-    for attempt in range(6):
-        found_any = False
+    required_metrics = ("errors", "invocations", "throttles", "duration_ms")
+    for attempt in range(12):
         for key, (metric_name, statistic) in metric_requests.items():
             response = cloudwatch.get_metric_statistics(
                 Namespace="AWS/Lambda",
@@ -345,10 +351,8 @@ def summarize_lambda_metrics(
             )
             values = [float(point[statistic]) for point in datapoints]
             latest_points[key] = values
-            if values:
-                found_any = True
 
-        if found_any or attempt == 5:
+        if all(latest_points[key] for key in required_metrics) or attempt == 11:
             break
         sleep(10)
 

@@ -1,8 +1,11 @@
 #!/bin/bash
 
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+source "$SCRIPT_DIR/../../../../scripts/pixi_env"
+
 eventfilename=$1
 
-FUNCTION_NAME=$(cat ../terraform/terraform.tfstate | jq '.outputs.info_lambda_name.value // empty' -r)
+FUNCTION_NAME=$(cat ../terraform/terraform.tfstate | tns_pixi_exec jq '.outputs.info_lambda_name.value // empty' -r)
 
 if [ -z "$AWS_ACCESS_KEY_ID" ]
 then
@@ -16,7 +19,7 @@ then
     exit 1;
 fi
 
-aws lambda invoke \
+tns_pixi_exec aws lambda invoke \
     --function-name "$FUNCTION_NAME" \
     --invocation-type RequestResponse \
     --payload fileb://$eventfilename \

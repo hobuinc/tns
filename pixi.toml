@@ -1,0 +1,20 @@
+[workspace]
+authors = ["Howard Butler <howard@hobu.co>"]
+channels = ["conda-forge"]
+name = "tns"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[dependencies]
+python = ">=3.13,<3.14"
+boto3 = "*"
+duckdb = "*"
+pyarrow = "*"
+pytest = "*"
+jq = "*"
+terraform = "*"
+awscli = "*"
+
+[tasks.test]
+cmd = "pytest -q"
+env = { PYTHONPATH = "src" }

@@ -329,3 +329,131 @@ At smaller scales, the extra compute per larger batch can outweigh the reduced o
 - Consider dynamic `tiles-per-file` sizing in the deployment utility so small and large scenarios use different optimal object counts.
 - Reduce duplicated schema validation when multiple files are known to come from the same generator and format contract.
 - Capture CloudWatch benchmark summaries automatically from [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py) so throughput, average duration, and output-file counts are preserved with each run.
+
+## Pixi Migration
+
+### What changed
+
+- Replaced the old Conda-based local environment definition at [environment.yaml](/Users/hobu/dev/git/tns/environment.yaml) with a Pixi workspace manifest and lockfile at [pixi.toml](/Users/hobu/dev/git/tns/pixi.toml) and [pixi.lock](/Users/hobu/dev/git/tns/pixi.lock).
+- Added [scripts/pixi_env](/Users/hobu/dev/git/tns/scripts/pixi_env) and updated the helper scripts in [scripts/init](/Users/hobu/dev/git/tns/scripts/init), [scripts/up](/Users/hobu/dev/git/tns/scripts/up), [scripts/down](/Users/hobu/dev/git/tns/scripts/down), [scripts/init_instance](/Users/hobu/dev/git/tns/scripts/init_instance), and [scripts/docker_init](/Users/hobu/dev/git/tns/scripts/docker_init) so they resolve `terraform`, `aws`, `jq`, and `python` from the repository's Pixi workspace instead of assuming an activated shell environment.
+- Added [terraform/resources/base/docker/pixi.toml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/pixi.toml) and [terraform/resources/base/docker/pixi.lock](/Users/hobu/dev/git/tns/terraform/resources/base/docker/pixi.lock), and rewrote [terraform/resources/base/docker/Dockerfile](/Users/hobu/dev/git/tns/terraform/resources/base/docker/Dockerfile) so the Lambda image runtime is built through Pixi instead of Conda.
+- Removed the old Docker-side Conda files [terraform/resources/base/docker/build-environment.yml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/build-environment.yml), [terraform/resources/base/docker/run-environment.yml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/run-environment.yml), and [terraform/resources/base/docker/root-bashrc](/Users/hobu/dev/git/tns/terraform/resources/base/docker/root-bashrc).
+- Updated [README.md](/Users/hobu/dev/git/tns/README.md) so the documented local setup and deployment workflow now use Pixi.
+- Updated [.gitignore](/Users/hobu/dev/git/tns/.gitignore) to ignore `.pixi/` in addition to the existing Terraform and DuckDB transient directories.
+
+### Why
+
+The project had two separate environment stories:
+
+- a Conda environment for local development and deployment tooling
+- a separate Conda/Mamba-based Docker build path for Lambda packaging
+
+That split made the workflow harder to reason about and forced the deployment story to keep carrying Conda-specific behavior even after the rest of the branch had moved toward a smaller, more explicit dependency model. Moving both local tooling and Lambda packaging onto Pixi gives the repository a single dependency-management path and a clearer source of truth.
+
+### Migration issues found and fixed
+
+The first Pixi deployment attempts surfaced several image-build problems that had to be corrected in the Docker packaging:
+
+- [terraform/resources/base/docker/Dockerfile](/Users/hobu/dev/git/tns/terraform/resources/base/docker/Dockerfile) originally tried to install `curl`, which conflicted with Amazon Linux 2023's built-in `curl-minimal`. The package installation step was adjusted to use the system `curl-minimal` and only install the remaining required tools.
+- The first Pixi-built runtime environment did not include `pip`, which broke the old `pip install awslambdaric` step. The fix was to add `awslambdaric` directly to [terraform/resources/base/docker/pixi.toml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/pixi.toml) and remove the post-copy `pip` install step from the Dockerfile.
+- [terraform/resources/base/ecr.tf](/Users/hobu/dev/git/tns/terraform/resources/base/ecr.tf) was updated so the Docker image trigger set now includes the Pixi manifest and lockfile hashes, ensuring Terraform rebuilds the image when the runtime environment changes.
+
+### Local verification
+
+The Pixi migration was validated locally with:
+
+- `pixi install --manifest-path /Users/hobu/dev/git/tns/pixi.toml`
+- `pixi run --manifest-path /Users/hobu/dev/git/tns/pixi.toml test`
+- wrapper checks through [scripts/pixi_env](/Users/hobu/dev/git/tns/scripts/pixi_env) to confirm `python`, `terraform`, and `aws` resolve correctly from the Pixi workspace
+
+During that verification, two latent repository issues were fixed as part of the migration:
+
+- [src/conftest.py](/Users/hobu/dev/git/tns/src/conftest.py), [src/test_intersections.py](/Users/hobu/dev/git/tns/src/test_intersections.py), and [src/tns_core.py](/Users/hobu/dev/git/tns/src/tns_core.py) were adjusted so tests no longer close the cached DuckDB connection inadvertently.
+- Added [pytest.ini](/Users/hobu/dev/git/tns/pytest.ini) recursion exclusions so pytest does not collect duplicate tests from the generated Docker `handlers/` staging directory.
+
+## Deployment Validation After Pixi
+
+### What was validated
+
+After the Pixi migration, the AWS deployment path was exercised again against the `hobutnstest` environment in `us-west-2` using the `grid-super` AWS profile. The goal was to prove that:
+
+- Terraform can still initialize and apply through the Pixi-managed tooling
+- the Lambda container can be built and pushed through the new Pixi-based Dockerfile
+- the live end-to-end compare flow still works after the packaging change
+
+### Clean rebuild and redeploy
+
+The deployment was explicitly torn down and recreated so the Lambda image would be rebuilt from scratch rather than reused from a prior state.
+
+The clean redeploy completed successfully and produced a fresh image digest:
+
+- `259232244835.dkr.ecr.us-west-2.amazonaws.com/tns-hobutnstest-ecr@sha256:4769b7345555a3012cbe839720624c35f0d8c3ff25a4477e3d0883a642328fb9`
+
+The recreated environment included:
+
+- S3 bucket `tns-hobutnstest-259232244835-us-west-2`
+- Lambda role `tns-hobutnstest-lambda-role`
+- Lambda function `tns-hobutnstest-comp-lambda`
+- SNS/SQS compare pipeline resources under the `hobutnstest` prefix
+
+### Live scenario results on the Pixi-built deployment
+
+Two live deployment scenarios were then run through the Pixi environment using [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py).
+
+#### Stress scenario
+
+- Command shape:
+  - `python src/test_deployment.py --scenario stress --tile-count 100000 --tiles-per-file 10000 --cleanup`
+- First clean-stack run result:
+  - `success_messages`: `6`
+  - `duration_seconds`: `37.42`
+  - `errors`: `0`
+  - `throttles`: `0`
+- Follow-up verification run after the metrics fix:
+  - `success_messages`: `8`
+  - `duration_seconds`: `32.5`
+  - `errors`: `0`
+  - `invocations`: `4`
+  - `throttles`: `0`
+  - `duration_ms average`: `2398.02`
+  - `concurrency max`: `1`
+
+#### Tiny-files scenario
+
+- Command shape:
+  - `python src/test_deployment.py --scenario tiny-files --file-count 200 --cleanup`
+- Result:
+  - `success_messages`: `60`
+  - `duration_seconds`: `81.8`
+  - `errors`: `0`
+  - `invocations`: `61`
+  - `throttles`: `0`
+  - `duration_ms average`: `551.81`
+  - `concurrency max`: `6`
+
+### CloudWatch metrics reporting fix
+
+One residual issue remained after the first Pixi-based deployment validation: short `stress` runs sometimes returned only concurrency data while `invocations`, `duration`, `errors`, and `throttles` were still empty.
+
+The root cause was in [src/test_deployment.py](/Users/hobu/dev/git/tns/src/test_deployment.py):
+
+- the CloudWatch summary helper stopped retrying as soon as any metric datapoint appeared
+- `ConcurrentExecutions` often becomes visible before `Invocations` and `Duration`
+
+To fix that:
+
+- the query window was widened and aligned to minute boundaries
+- the retry loop now waits for the core metric set (`errors`, `invocations`, `throttles`, and `duration_ms`) instead of exiting as soon as any metric is populated
+
+The follow-up live `stress` verification confirmed that the metrics block now contains the expected invocation and duration data for a short run.
+
+### Outcome
+
+The current branch now has:
+
+- a Pixi-based local toolchain
+- a Pixi-based Lambda image packaging path
+- a clean full AWS deployment path that builds and pushes the container image successfully
+- live `stress` and `tiny-files` deployment validations passing on the Pixi-built stack
+
+At this point, the Pixi migration is not just syntactic. It has been exercised all the way through local testing, Docker image build, Terraform apply, live Lambda execution, and CloudWatch-backed deployment reporting.

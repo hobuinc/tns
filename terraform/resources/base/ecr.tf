@@ -32,7 +32,8 @@ resource "null_resource" "ecr_image" {
   count = var.ecr_image_uri == "" ? 1 : 0
   triggers = {
     docker_file      = md5(file("${path.module}/docker/Dockerfile"))
-    environment_file = md5(file("${path.module}/docker/run-environment.yml"))
+    environment_file = md5(file("${path.module}/docker/pixi.toml"))
+    lock_file        = md5(file("${path.module}/docker/pixi.lock"))
     entry_file       = md5(file("${path.module}/docker/python-entry.sh"))
     handlers         = sha1(join("", [for f in fileset("${path.module}/../../../src/", "**") : filesha1("${path.module}/../../../src/${f}")]))
   }

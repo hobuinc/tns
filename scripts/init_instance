@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+source "$SCRIPT_DIR/pixi_env"
 
 export TF_CLI_CONFIG_FILE=$(realpath "$SCRIPT_DIR/../terraform/.terraformrc")
-cd "$SCRIPT_DIR/../terraform" && terraform init
+cd "$SCRIPT_DIR/../terraform" && tns_pixi_exec terraform init

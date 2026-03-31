@@ -22,25 +22,32 @@ The spatial compare logic is implemented with DuckDB's spatial extension, which 
 
 ## Development Environment
 
-Create and activate the conda environment:
+This repository now uses Pixi for local development and deployment tooling.
+
+Install the workspace environment:
 
 ```bash
-conda env create -f environment.yaml
-conda activate tns
+pixi install
 ```
 
-If the environment already exists and you updated `environment.yaml`, run:
+Run commands from the workspace with `pixi exec` or `pixi run`:
 
 ```bash
-conda env update -f environment.yaml --prune
+pixi run test
+pixi exec python --version
 ```
+
+The top-level [pixi.toml](/Users/hobu/dev/git/tns/pixi.toml) defines the local toolchain used by the
+deployment scripts. The Lambda image build also uses Pixi from
+[terraform/resources/base/docker/pixi.toml](/Users/hobu/dev/git/tns/terraform/resources/base/docker/pixi.toml),
+so both local tooling and runtime packaging resolve dependencies through the same ecosystem.
 
 ## Local Testing
 
 Run the fast local test suite:
 
 ```bash
-pytest -q
+pixi run test
 ```
 
 This covers the DuckDB GeoParquet intersection logic and Lambda message handling without requiring AWS.
@@ -57,7 +64,8 @@ On a machine with internet access:
 ./scripts/init
 ```
 
-This prepares Terraform plugins under `terraform/.terraform/plugins` so they can be reused later.
+This prepares Terraform plugins under `terraform/.terraform/plugins` so they can be reused later. The
+helper script runs Terraform from the repo's Pixi environment.
 
 ### 2. Initialize a deployment host
 
@@ -118,3 +126,5 @@ The script will create or reuse an ECR repository named `tns-<env>-ecr` and prin
 - The AOI source dataset is expected at `subs/subscriptions.parquet`.
 - Result records are written as Parquet under `intersects/`.
 - Output messages contain `source_files`, `aoi_list`, `s3_output_path`, and `status` attributes.
+- `./scripts/init`, `./scripts/up`, `./scripts/down`, and `./scripts/docker_init` all resolve
+  `terraform`, `aws`, `jq`, and `python` from the repo's Pixi workspace.

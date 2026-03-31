@@ -119,7 +119,11 @@ def connect_duckdb(extension_directory: Path | None = None) -> duckdb.DuckDBPyCo
     """Create or reuse a DuckDB connection with the spatial extension loaded."""
     global _DUCKDB_CONNECTION
     if _DUCKDB_CONNECTION is not None:
-        return _DUCKDB_CONNECTION
+        try:
+            _DUCKDB_CONNECTION.execute("SELECT 1")
+            return _DUCKDB_CONNECTION
+        except duckdb.Error:
+            _DUCKDB_CONNECTION = None
 
     ext_dir = extension_directory or get_extension_directory()
     ext_dir.mkdir(parents=True, exist_ok=True)

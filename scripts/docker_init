@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+source "$SCRIPT_DIR/pixi_env"
 cd "$SCRIPT_DIR"
 DOCKER_DIR="../terraform/resources/base/docker"
 PLATFORM=linux/amd64
@@ -26,7 +27,7 @@ then
     echo "INFO: AWS_DEFAULT_REGION not set, setting REGION to $REGION"
 fi
 
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
+export AWS_ACCOUNT_ID=$(tns_pixi_exec aws sts get-caller-identity --query 'Account' --output text)
 if [[ "$AWS_ACCOUNT_ID" == "" ]]
 then
     echo "Unable to fetch identity from aws sts to name container!"
@@ -36,17 +37,17 @@ fi
 FULL_CONTAINER_NAME="$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$CONTAINER_NAME"
 
 # Log into ECR with AWS Credentials
-aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+tns_pixi_exec aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
-ECR_REPONAME=$(aws ecr --region "$REGION" describe-repositories | jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(tns_pixi_exec aws ecr --region "$REGION" describe-repositories | tns_pixi_exec jq -r --arg repo "$REPO" '.repositories[]? | select(.repositoryName == $repo).repositoryName')
 echo "Repository found ${ECR_REPONAME}"
 
 if [[ "$ECR_REPONAME" == "" ]]
 then
-    aws ecr create-repository --region "$REGION" --repository-name "$REPO"
+    tns_pixi_exec aws ecr create-repository --region "$REGION" --repository-name "$REPO"
 fi
 
-ECR_REPONAME=$(aws ecr --region "$REGION" describe-repositories | jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
+ECR_REPONAME=$(tns_pixi_exec aws ecr --region "$REGION" describe-repositories | tns_pixi_exec jq -r --arg repo "$REPO" '.repositories[]? | select(.repositoryName == $repo).repositoryName')
 echo "Checking if we find ECR_REPONAME: $ECR_REPONAME"
 if [[ "$ECR_REPONAME" == "" ]]
 then

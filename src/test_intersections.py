@@ -24,9 +24,9 @@ def test_build_intersection_query_matches_all_states(
     write_geometry_parquet(aoi_path, aoi_rows)
     write_geometry_parquet(tile_path, tile_rows)
 
-    with connect_duckdb() as connection:
-        query = build_intersection_query(str(aoi_path), [str(tile_path)])
-        rows = connection.execute(query).fetchall()
+    connection = connect_duckdb()
+    query = build_intersection_query(str(aoi_path), [str(tile_path)])
+    rows = connection.execute(query).fetchall()
 
     assert len(rows) == len(aoi_rows)
     lookup = {row[0]: row[1] for row in rows}
@@ -75,8 +75,8 @@ def test_multiple_tile_parquets_are_joined_together(
     write_geometry_parquet(first, split_tile_rows[:5])
     write_geometry_parquet(second, split_tile_rows[5:])
 
-    with connect_duckdb() as connection:
-        query = build_intersection_query(str(aoi_path), [str(first), str(second)])
-        rows = connection.execute(query).fetchall()
+    connection = connect_duckdb()
+    query = build_intersection_query(str(aoi_path), [str(first), str(second)])
+    rows = connection.execute(query).fetchall()
 
     assert len(rows) == len(split_tile_rows)

@@ -50,18 +50,18 @@ def write_geometry_parquet(path: Path, rows: list[dict[str, str]]) -> None:
     )
     pq.write_table(raw_table, raw_path)
 
-    with connect_duckdb() as connection:
-        connection.execute(
-            f"""
-            COPY (
-                SELECT
-                    pk_and_model,
-                    ST_AsWKB(ST_GeomFromText(geometry_wkt)) AS geometry
-                FROM read_parquet('{quote_sql_string(str(raw_path))}')
-            ) TO '{quote_sql_string(str(path))}'
-            (FORMAT PARQUET, COMPRESSION ZSTD)
-            """
-        )
+    connection = connect_duckdb()
+    connection.execute(
+        f"""
+        COPY (
+            SELECT
+                pk_and_model,
+                ST_AsWKB(ST_GeomFromText(geometry_wkt)) AS geometry
+            FROM read_parquet('{quote_sql_string(str(raw_path))}')
+        ) TO '{quote_sql_string(str(path))}'
+        (FORMAT PARQUET, COMPRESSION ZSTD)
+        """
+    )
 
     raw_path.unlink()
 

@@ -2,10 +2,13 @@
 
 # ./run-local.sh /var/task/python-entry.sh pdal_lambda.ecr.info.handler
 
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+source "$SCRIPT_DIR/../../../../scripts/pixi_env"
+
 entrypoint="$1"
 command="$2"
 
-CONTAINER=$(cd ../../../ && terraform output --json | jq '.container.value' -r)
+CONTAINER=$(cd ../../../ && tns_pixi_exec terraform output --json | tns_pixi_exec jq '.container.value' -r)
 
 REGION=$AWS_DEFAULT_REGION
 if [ -z "$REGION" ]
@@ -17,8 +20,8 @@ fi
 LOCALPORT=9000
 REMOTEPORT=8080
 
-KEY_ID=$(aws --profile $AWS_DEFAULT_PROFILE configure get aws_access_key_id)
-SECRET_ID=$(aws --profile $AWS_DEFAULT_PROFILE configure get aws_secret_access_key)
+KEY_ID=$(tns_pixi_exec aws --profile "$AWS_DEFAULT_PROFILE" configure get aws_access_key_id)
+SECRET_ID=$(tns_pixi_exec aws --profile "$AWS_DEFAULT_PROFILE" configure get aws_secret_access_key)
 echo $KEY_ID
 echo $SECRET_ID
 

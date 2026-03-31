@@ -4,6 +4,7 @@ build/
 *.tfstate
 *.tfstate.backup
 .terraform/
+.pixi/
 .duckdb_extensions/
 **/__pycache__/
 terraform/resources/base/docker/handlers

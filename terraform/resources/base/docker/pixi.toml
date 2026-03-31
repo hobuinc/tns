@@ -1,0 +1,13 @@
+[workspace]
+authors = ["Howard Butler <howard@hobu.co>"]
+channels = ["conda-forge"]
+name = "tns-lambda"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[dependencies]
+python = ">=3.13,<3.14"
+boto3 = "*"
+duckdb = "*"
+pyarrow = "*"
+awslambdaric = "*"

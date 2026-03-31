@@ -41,20 +41,22 @@ TNS is split into 4 sections of operation:
     ./scripts/docker_init $REPO
     ```
 
-4. Duplicate local TNS code to the remote instance with options like `rsync` or by copying to an s3 bucket first `aws s3 sync`.
+4. Duplicate local TNS code to the remote instance by copying to S3 locally.
 
     ```
-    aws s3 sync ./ s3://{your_bucket}/tns
-    ```
-
-    ```
-    {rsync call here}
+    aws s3 sync {tns_path} s3://{your_bucket}/tns
     ```
 
 
 #### From the system without internet access
-1. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.
-2. Run terraform
+1. Copy down TNS from S3 to this instance
+    ```
+    aws s3 sync s3://{your_bucket}/tns {tns_path}
+    ```
+
+2. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.
+
+3. Run terraform
     ```
     VAR_PATH="var-file.tfvars" # the path to the variables file
     ./scripts/up $VAR_PATH

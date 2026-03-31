@@ -8,8 +8,10 @@ Scenarios
 ---------
 - ``lambda`` uploads a single AOI parquet and one compare parquet, then checks
   that a success message and output parquet are produced.
-- ``stress`` uploads many compare parquet files and waits for the expected
-  number of success messages, while also summarizing Lambda metrics.
+- ``stress`` uploads many compare parquet files and validates batched success
+  handling while summarizing Lambda metrics.
+- ``tiny-files`` uploads many one-tile compare parquet files to measure the
+  overhead of high object-count workloads and summarize Lambda metrics.
 
 How to execute
 --------------
@@ -22,6 +24,8 @@ How to execute
 
    ``python src/test_deployment.py --scenario stress --tile-count 100000``
 
+   ``python src/test_deployment.py --scenario tiny-files --file-count 200``
+
 Important arguments
 -------------------
 - ``--scenario`` chooses the live test scenario to run.
@@ -33,6 +37,8 @@ Important arguments
   compare parquet object.
 - ``--tile-count`` controls the total number of tile features generated during
   the stress scenario.
+- ``--file-count`` controls how many one-tile compare parquet objects are
+  generated during the tiny-files scenario.
 - ``--max-wait-seconds`` and ``--poll-seconds`` control how long the utility
   waits for SQS output before declaring the run failed.
 - ``--cleanup`` removes the uploaded compare and AOI objects after the scenario
@@ -49,7 +55,7 @@ from dataclasses import dataclass
 from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from time import time
+from time import sleep, time
 from typing import Any
 
 import boto3
@@ -82,6 +88,7 @@ class ScenarioResult:
     success_messages: int
     output_path: str | None
     duration_seconds: float
+    metrics: dict[str, Any] | None = None
 
 
 def quote_sql_string(value: str) -> str:
@@ -132,6 +139,17 @@ def build_tile_frame(
     return rows
 
 
+def build_single_tile_rows(state_count: int, file_index: int) -> list[dict[str, str]]:
+    """Build one compare row so a scenario can fan out into many tiny files."""
+    feature = load_state_features(state_count)[file_index % state_count]
+    return [
+        {
+            "pk_and_model": f"tiny_{file_index}",
+            "geometry_wkt": feature_to_wkt(feature),
+        }
+    ]
+
+
 def write_rows_to_s3(bucket_name: str, key: str, rows: list[dict[str, str]]) -> None:
     """Write WKT geometry rows to S3 as the WKB parquet format TNS expects."""
     s3 = boto3.client("s3")
@@ -178,12 +196,17 @@ def load_terraform_output(terraform_dir: Path) -> DeploymentTargets:
     )
     payload = json.loads(completed.stdout)
     values = {key: value["value"] for key, value in payload.items()}
+    lambda_role_name = values.get("lambda_role_name", "")
+    lambda_name = "tns_comp_lambda"
+    if lambda_role_name.startswith("tns-") and lambda_role_name.endswith("-lambda-role"):
+        lambda_name = lambda_role_name.removesuffix("-lambda-role") + "-comp-lambda"
     return DeploymentTargets(
         aws_region=values["aws_region"],
         s3_bucket_name=values["s3_bucket_name"],
         sqs_in=values["sqs_in"],
         sqs_out=values["sqs_out"],
         sns_out=values["sns_out"],
+        lambda_name=lambda_name,
     )
 
 
@@ -283,31 +306,131 @@ def get_message_attributes(message: dict[str, Any]) -> dict[str, Any]:
 
 def summarize_lambda_metrics(
     lambda_name: str, region: str, start_time: dt.datetime, end_time: dt.datetime
-) -> dict[str, list[float]]:
-    """Fetch simple Lambda CloudWatch metrics for the scenario window."""
+) -> dict[str, Any]:
+    """Fetch a compact Lambda metric summary for the scenario window.
+
+    CloudWatch Lambda metrics can lag behind function execution by a short
+    amount of time, so this helper retries briefly before returning an empty
+    summary.
+    """
     cloudwatch = boto3.client("cloudwatch", region_name=region)
-    errors = cloudwatch.get_metric_statistics(
-        Namespace="AWS/Lambda",
-        MetricName="Errors",
-        Dimensions=[{"Name": "FunctionName", "Value": lambda_name}],
-        StartTime=start_time,
-        EndTime=end_time,
-        Period=60,
-        Statistics=["Sum"],
-    )
-    durations = cloudwatch.get_metric_statistics(
-        Namespace="AWS/Lambda",
-        MetricName="Duration",
-        Dimensions=[{"Name": "FunctionName", "Value": lambda_name}],
-        StartTime=start_time,
-        EndTime=end_time,
-        Period=60,
-        Statistics=["Average"],
-    )
-    return {
-        "errors": [point["Sum"] for point in errors["Datapoints"]],
-        "durations": [point["Average"] for point in durations["Datapoints"]],
+    metric_requests = {
+        "errors": ("Errors", "Sum"),
+        "invocations": ("Invocations", "Sum"),
+        "throttles": ("Throttles", "Sum"),
+        "duration_ms": ("Duration", "Average"),
+        "concurrency": ("ConcurrentExecutions", "Maximum"),
     }
+    summary: dict[str, Any] = {}
+
+    # Query a slightly wider time window and allow for metric publication lag.
+    query_start = start_time - dt.timedelta(minutes=1)
+    query_end = end_time + dt.timedelta(minutes=1)
+
+    latest_points: dict[str, list[float]] = {key: [] for key in metric_requests}
+    for attempt in range(6):
+        found_any = False
+        for key, (metric_name, statistic) in metric_requests.items():
+            response = cloudwatch.get_metric_statistics(
+                Namespace="AWS/Lambda",
+                MetricName=metric_name,
+                Dimensions=[{"Name": "FunctionName", "Value": lambda_name}],
+                StartTime=query_start,
+                EndTime=query_end,
+                Period=60,
+                Statistics=[statistic],
+            )
+            datapoints = sorted(
+                response["Datapoints"], key=lambda point: point["Timestamp"]
+            )
+            values = [float(point[statistic]) for point in datapoints]
+            latest_points[key] = values
+            if values:
+                found_any = True
+
+        if found_any or attempt == 5:
+            break
+        sleep(10)
+
+    for key, values in latest_points.items():
+        summary[key] = {
+            "values": values,
+            "total": round(sum(values), 2),
+            "max": round(max(values), 2) if values else 0.0,
+            "average": round(sum(values) / len(values), 2) if values else 0.0,
+        }
+
+    return summary
+
+
+def _validate_full_aoi_output(
+    output_uri: str, rows: list[dict[str, Any]], state_count: int
+) -> None:
+    """Require an output parquet to contain every AOI for full-tile scenarios."""
+    if len(rows) != state_count:
+        raise AssertionError(
+            "Expected each output parquet to contain "
+            f"{state_count} AOI rows, received {len(rows)} from {output_uri}."
+        )
+
+
+def _validate_partial_aoi_output(
+    output_uri: str, rows: list[dict[str, Any]], state_count: int
+) -> None:
+    """Allow sparse AOI matches for tiny-file scenarios while catching empties."""
+    if not rows:
+        raise AssertionError(f"Expected non-empty output parquet for {output_uri}.")
+    if len(rows) > state_count:
+        raise AssertionError(
+            "Expected tiny-files output parquet to contain at most "
+            f"{state_count} AOI rows, received {len(rows)} from {output_uri}."
+        )
+
+
+def wait_for_outputs(
+    *,
+    targets: DeploymentTargets,
+    expected_source_uris: set[str],
+    row_count_validator,
+    wait_time_seconds: int,
+    max_wait_seconds: int,
+) -> tuple[list[dict[str, Any]], set[str], set[str]]:
+    """Collect success/failure messages until all expected sources are observed."""
+    failures: list[dict[str, Any]] = []
+    observed_source_uris: set[str] = set()
+    output_uris: set[str] = set()
+    start_clock = time()
+
+    while (
+        time() - start_clock < max_wait_seconds
+        and observed_source_uris != expected_source_uris
+    ):
+        messages = receive_messages(
+            targets.sqs_out,
+            targets.aws_region,
+            wait_time_seconds=wait_time_seconds,
+            max_number_of_messages=10,
+        )
+        if not messages:
+            continue
+
+        for message in messages:
+            attrs = get_message_attributes(message)
+            delete_sqs_message(message, targets.sqs_out, targets.aws_region)
+            if attrs["status"]["Value"] == "failed":
+                failures.append(attrs)
+                continue
+
+            source_files = set(json.loads(attrs["source_files"]["Value"]))
+            observed_source_uris.update(source_files)
+
+            output_uri = attrs["s3_output_path"]["Value"]
+            if output_uri not in output_uris:
+                rows = read_output_parquet(output_uri, targets.aws_region)
+                row_count_validator(output_uri, rows)
+                output_uris.add(output_uri)
+
+    return failures, observed_source_uris, output_uris
 
 
 def run_lambda_scenario(
@@ -418,40 +541,15 @@ def run_stress_scenario(
 
     start_clock = time()
     metric_start = dt.datetime.now(dt.timezone.utc)
-
-    while (
-        time() - start_clock < max_wait_seconds
-        and observed_source_uris != expected_source_uris
-    ):
-        messages = receive_messages(
-            targets.sqs_out,
-            targets.aws_region,
-            wait_time_seconds=wait_time_seconds,
-            max_number_of_messages=10,
-        )
-        if not messages:
-            continue
-
-        for message in messages:
-            attrs = get_message_attributes(message)
-            delete_sqs_message(message, targets.sqs_out, targets.aws_region)
-            if attrs["status"]["Value"] == "failed":
-                failures.append(attrs)
-                continue
-
-            source_files = set(json.loads(attrs["source_files"]["Value"]))
-            observed_source_uris.update(source_files)
-
-            output_uri = attrs["s3_output_path"]["Value"]
-            if output_uri not in output_uris:
-                rows = read_output_parquet(output_uri, targets.aws_region)
-                if len(rows) != state_count:
-                    raise AssertionError(
-                        "Expected each stress output parquet to contain "
-                        f"{state_count} AOI rows, received {len(rows)} from "
-                        f"{output_uri}."
-                    )
-                output_uris.add(output_uri)
+    failures, observed_source_uris, output_uris = wait_for_outputs(
+        targets=targets,
+        expected_source_uris=expected_source_uris,
+        row_count_validator=lambda output_uri, rows: _validate_full_aoi_output(
+            output_uri, rows, state_count
+        ),
+        wait_time_seconds=wait_time_seconds,
+        max_wait_seconds=max_wait_seconds,
+    )
 
     metric_end = dt.datetime.now(dt.timezone.utc)
     metrics = summarize_lambda_metrics(
@@ -478,8 +576,10 @@ def run_stress_scenario(
             "success messages. Missing sources: "
             f"{missing_sources[:5]}{'...' if len(missing_sources) > 5 else ''}"
         )
-    if any(metrics["errors"]):
-        raise AssertionError(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
+    if metrics["errors"]["total"] > 0:
+        raise AssertionError(
+            f"Lambda Errors metrics were non-zero: {metrics['errors']['values']}"
+        )
     if not output_uris:
         raise AssertionError("Stress scenario produced no output parquet files.")
 
@@ -488,6 +588,88 @@ def run_stress_scenario(
         success_messages=len(output_uris),
         output_path=None,
         duration_seconds=time() - start_clock,
+        metrics=metrics,
+    )
+
+
+def run_tiny_files_scenario(
+    targets: DeploymentTargets,
+    state_count: int,
+    file_count: int,
+    wait_time_seconds: int,
+    max_wait_seconds: int,
+    cleanup: bool,
+) -> ScenarioResult:
+    """Run a high-object-count scenario with one tile per compare parquet file."""
+    uploaded_keys = ["subs/subscriptions.parquet"]
+    expected_source_uris: set[str] = set()
+
+    clear_sqs(targets.sqs_out, targets.aws_region)
+    clear_sqs(targets.sqs_in, targets.aws_region)
+
+    write_rows_to_s3(
+        targets.s3_bucket_name,
+        uploaded_keys[0],
+        build_aoi_rows(state_count),
+    )
+
+    for file_index in range(file_count):
+        key = f"compare/one_tile_{file_index}.parquet"
+        uploaded_keys.append(key)
+        expected_source_uris.add(f"s3://{targets.s3_bucket_name}/{key}")
+        write_rows_to_s3(
+            targets.s3_bucket_name,
+            key,
+            build_single_tile_rows(state_count, file_index),
+        )
+
+    start_clock = time()
+    metric_start = dt.datetime.now(dt.timezone.utc)
+    failures, observed_source_uris, output_uris = wait_for_outputs(
+        targets=targets,
+        expected_source_uris=expected_source_uris,
+        row_count_validator=lambda output_uri, rows: _validate_partial_aoi_output(
+            output_uri, rows, state_count
+        ),
+        wait_time_seconds=wait_time_seconds,
+        max_wait_seconds=max_wait_seconds,
+    )
+    metric_end = dt.datetime.now(dt.timezone.utc)
+    metrics = summarize_lambda_metrics(
+        targets.lambda_name,
+        targets.aws_region,
+        metric_start,
+        metric_end,
+    )
+
+    if cleanup:
+        output_keys = [parse_s3_uri(uri)[1] for uri in output_uris]
+        cleanup_s3_objects(
+            targets.s3_bucket_name,
+            uploaded_keys + output_keys,
+            targets.aws_region,
+        )
+
+    if failures:
+        raise AssertionError(f"Tiny-files scenario failures: {failures}")
+    missing_sources = sorted(expected_source_uris.difference(observed_source_uris))
+    if missing_sources:
+        raise TimeoutError(
+            "Timed out before all tiny-file compare objects were represented in "
+            "success messages. Missing sources: "
+            f"{missing_sources[:5]}{'...' if len(missing_sources) > 5 else ''}"
+        )
+    if metrics["errors"]["total"] > 0:
+        raise AssertionError(
+            f"Lambda Errors metrics were non-zero: {metrics['errors']['values']}"
+        )
+
+    return ScenarioResult(
+        scenario="tiny-files",
+        success_messages=len(output_uris),
+        output_path=None,
+        duration_seconds=time() - start_clock,
+        metrics=metrics,
     )
 
 
@@ -500,11 +682,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  python src/test_deployment.py --scenario lambda\n"
             "  python src/test_deployment.py --scenario stress --tile-count 100000\n"
+            "  python src/test_deployment.py --scenario tiny-files --file-count 200\n"
         ),
     )
     parser.add_argument(
         "--scenario",
-        choices=("lambda", "stress"),
+        choices=("lambda", "stress", "tiny-files"),
         required=True,
         help="Live deployment scenario to execute.",
     )
@@ -531,6 +714,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=int,
         default=100000,
         help="Total number of tile features to generate for the stress scenario.",
+    )
+    parser.add_argument(
+        "--file-count",
+        type=int,
+        default=200,
+        help="Total number of one-tile compare parquet files for the tiny-files scenario.",
     )
     parser.add_argument(
         "--wait-time-seconds",
@@ -567,12 +756,21 @@ def main(argv: list[str] | None = None) -> int:
             max_wait_seconds=args.max_wait_seconds,
             cleanup=args.cleanup,
         )
-    else:
+    elif args.scenario == "stress":
         result = run_stress_scenario(
             targets=targets,
             state_count=args.state_count,
             tile_count=args.tile_count,
             tiles_per_file=args.tiles_per_file,
+            wait_time_seconds=args.wait_time_seconds,
+            max_wait_seconds=args.max_wait_seconds,
+            cleanup=args.cleanup,
+        )
+    else:
+        result = run_tiny_files_scenario(
+            targets=targets,
+            state_count=args.state_count,
+            file_count=args.file_count,
             wait_time_seconds=args.wait_time_seconds,
             max_wait_seconds=args.max_wait_seconds,
             cleanup=args.cleanup,
@@ -585,6 +783,7 @@ def main(argv: list[str] | None = None) -> int:
                 "success_messages": result.success_messages,
                 "output_path": result.output_path,
                 "duration_seconds": round(result.duration_seconds, 2),
+                "metrics": result.metrics,
             },
             indent=2,
         )

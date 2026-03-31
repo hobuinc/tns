@@ -457,3 +457,143 @@ The current branch now has:
 - live `stress` and `tiny-files` deployment validations passing on the Pixi-built stack
 
 At this point, the Pixi migration is not just syntactic. It has been exercised all the way through local testing, Docker image build, Terraform apply, live Lambda execution, and CloudWatch-backed deployment reporting.
+
+## Additional Stress Benchmarks
+
+### What was tested
+
+After the Pixi deployment path was validated, six additional live `stress` scenarios were run against the deployed `hobutnstest` stack in `us-west-2` to compare a broader range of workloads under one consistent file-sizing strategy.
+
+All six runs used:
+
+- `--scenario stress`
+- `--tiles-per-file 10000`
+- `--cleanup`
+- `AWS_PROFILE=grid-super`
+- region `us-west-2`
+- the live `hobutnstest` deployment created by the Pixi-based Terraform flow
+
+The tile-count scenarios were:
+
+- `100000`
+- `200000`
+- `600000`
+- `1000000`
+- `2000000`
+- `6000000`
+
+The larger three runs were executed after confirming that the earlier mid-range runs had fully drained:
+
+- no local `test_deployment.py --scenario stress` process remained active
+- the input queue `tns-hobutnstest-compare-sqs-input` had `0` visible and `0` in-flight messages
+- the output queue `tns-hobutnstest-compare-sqs-output` had `0` visible and `0` in-flight messages
+
+### Results
+
+#### `100000` tiles
+
+- `success_messages`: `10`
+- `duration_seconds`: `27.75`
+- `errors total`: `0`
+- `invocations total`: `3`
+- `throttles total`: `0`
+- `duration_ms average`: `3165.30`
+- `concurrency max`: `2`
+
+#### `200000` tiles
+
+- `success_messages`: `16`
+- `duration_seconds`: `25.2`
+- `errors total`: `0`
+- `invocations total`: `19`
+- `throttles total`: `0`
+- `duration_ms average`: `2566.68`
+- `concurrency max`: `2`
+
+#### `600000` tiles
+
+- `success_messages`: `40`
+- `duration_seconds`: `48.54`
+- `errors total`: `0`
+- `invocations total`: `38`
+- `throttles total`: `0`
+- `duration_ms average`: `2736.58`
+- `concurrency max`: `3`
+
+#### `1000000` tiles
+
+- `success_messages`: `65`
+- `duration_seconds`: `76.54`
+- `errors total`: `0`
+- `invocations total`: `59`
+- `throttles total`: `0`
+- `duration_ms average`: `2602.95`
+- `concurrency max`: `3`
+- notes:
+  - this was the first million-scale validation after the Pixi migration
+  - the run completed in just over `1.25` minutes with stable per-invocation timing
+  - CloudWatch showed steady work across three reporting windows rather than a single spike
+
+#### `2000000` tiles
+
+- `success_messages`: `137`
+- `duration_seconds`: `179.08`
+- `errors total`: `0`
+- `invocations total`: `47`
+- `throttles total`: `0`
+- `duration_ms average`: `2553.74`
+- `concurrency max`: `3`
+- notes:
+  - runtime increased to just under `3` minutes while average invocation duration stayed almost unchanged
+  - output batching remained healthy, with more result messages but no sign of Lambda saturation
+  - this run reinforced that the current bottleneck is aggregate batch volume rather than degraded per-batch compute time
+
+#### `6000000` tiles
+
+- `success_messages`: `417`
+- `duration_seconds`: `527.31`
+- `errors total`: `0`
+- `invocations total`: `56`
+- `throttles total`: `0`
+- `duration_ms average`: `2530.95`
+- `concurrency max`: `3`
+- notes:
+  - this was a true long soak run at roughly `8.8` minutes end to end
+  - during execution the input queue fully drained while the output queue continued to drain down from visible messages, confirming the run had moved from ingestion to result collection rather than hanging
+  - after completion there was no remaining local stress process and both SQS queues returned to `0` visible and `0` in-flight messages
+
+### What the results suggest
+
+These runs reinforce a few patterns already seen in earlier benchmarking:
+
+- The deployed stack continues to run without Lambda throttling or Lambda error spikes even as the workload increases.
+- Runtime does not scale linearly with tile count at this file size, but short-run variance from batching and CloudWatch timing still matters enough that nearby scenarios can invert unexpectedly.
+- The `200000`-tile run completed slightly faster than the `100000`-tile run in this sample, which suggests that queue batching and Lambda batch composition can outweigh raw tile count at this scale.
+- The `600000`-tile run increased total runtime substantially, but still stayed under one minute and did so without driving concurrency beyond `3`.
+- The larger `1000000`, `2000000`, and `6000000` runs extended the same pattern: wall-clock time rose with input size, but Lambda still stayed free of throttles and errors and never exceeded concurrency `3`.
+- Average invocation duration remained tightly clustered around `2.5s` to `2.6s` even at the largest scales, which suggests the per-batch work is staying stable and the extra runtime is mostly coming from the increased number of batches and artifacts.
+- The `6000000`-tile run completed in `527.31s` while the input queue drained cleanly and the output queue was progressively consumed, which indicates the current batching settings are still workable at multi-million tile volume even if total runtime is now measured in several minutes.
+- The `1000000` to `6000000` progression also showed that total wall-clock growth is much steeper than the change in average invocation duration, which is another sign that orchestration overhead and total batch count dominate once the individual Lambda batches are healthy.
+
+### Interpretation
+
+For the current `hobutnstest` configuration, `--tiles-per-file 10000` remains a reasonable middle-ground stress setting:
+
+- small enough to avoid the slower `20000`-tile-per-file behavior seen in some smaller runs
+- large enough to keep S3/SNS/SQS overhead from dominating the workload
+
+The newer CloudWatch reporting logic also proved useful here, because each run now returned populated `invocations`, `duration`, `errors`, `throttles`, and `concurrency` data rather than only partial metrics.
+
+For the larger end of the sweep, the data points to a fairly consistent operating envelope:
+
+- Lambda runtime per invocation stayed stable.
+- Lambda concurrency stayed low and controlled.
+- There was still no evidence of AWS-side throttling.
+
+That combination suggests the next meaningful speedups will probably come from reducing total batch count or improving artifact fan-out rather than from chasing Lambda stability problems.
+
+At this point the benchmark evidence supports a few practical conclusions for future tuning:
+
+- the current Lambda memory, SQS batching window, and event source batch size are stable enough for multi-million tile runs
+- the system is not constrained by Lambda throttling or runaway concurrency under these scenarios
+- the best next experiments should target fewer compare artifacts per scenario, larger effective work units per Lambda batch, or a reduction in downstream result object/message fan-out

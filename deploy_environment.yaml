@@ -1,0 +1,8 @@
+name: 'tns'
+channels:
+  - conda-forge
+dependencies:
+  - terraform
+  - jq
+  - boto3
+  - awscli

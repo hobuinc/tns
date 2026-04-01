@@ -53,7 +53,7 @@ def sqs_get_messages(sqs_arn, region):
     )
 
 
-def sqs_listen(sqs_arn, region, retries=5):
+def sqs_listen(sqs_arn, region, retries=10):
     sqs = boto3.client("sqs", region_name=region)
     queue_name = sqs_arn.split(":")[-1]
     queue_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -80,6 +80,7 @@ def sqs_listen(sqs_arn, region, retries=5):
                 retry_count += 1
                 if retry_count >= retries:
                     return messages
+        time.sleep(1)
     return messages
 
 
@@ -126,13 +127,18 @@ def summarize_lambda_metrics(
     times = [point["Timestamp"] for point in durations["Datapoints"]]
     return {
         "errors": [point["Sum"] for point in errors["Datapoints"]],
-        "avg_durations": [point["Average"] for point in durations["Datapoints"]],
-        "total_lambda_time": sum([point["Sum"] for point in durations["Datapoints"]]),
+        "avg_durations": [
+            point["Average"] for point in durations["Datapoints"]
+        ],
+        "total_lambda_time": sum(
+            [point["Sum"] for point in durations["Datapoints"]]
+        ),
         "start_time": min(times),
         "end_time": max(times),
     }
 
-@pytest.mark.parametrize('env_type',('prod',), indirect=True)
+
+@pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_lambda(
     env_type,
     region: str,
@@ -191,8 +197,9 @@ def test_lambda(
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
+
 @pytest.mark.skip(reason="Manually run only.")
-@pytest.mark.parametrize('env_type',('prod',), indirect=True)
+@pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_many_small_tiles(
     env_type,
     config: CloudConfig,
@@ -222,18 +229,18 @@ def test_many_small_tiles(
     """
 
     cities = config.con.execute(cities_cmd).fetch_df()
+
     def write_one(city, vsis_path):
         gdf = st.GeoDataFrame(city, geometry_format="wkb", strict=True)
         gdf = gdf.with_columns(st.geom().st.set_srid(4326))
-        gdf.st.write_file(path=vsis_path, driver="PARQUET", compression='zstd')
-
+        gdf.st.write_file(path=vsis_path, driver="PARQUET", compression="zstd")
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         for idx in range(count):
             city = cities.loc[idx:idx]
             key = f"compare/one_tile_{idx}.parquet"
-            vsis_path = f'/vsis3/{bucket_name}/{key}'
-            s3_key = f's3://{bucket_name}/{key}'
+            vsis_path = f"/vsis3/{bucket_name}/{key}"
+            s3_key = f"s3://{bucket_name}/{key}"
             key_set.add(s3_key)
             cleanup_list.append(key)
             executor.submit(write_one, city, vsis_path)
@@ -293,9 +300,8 @@ def test_many_small_tiles(
         raise AssertionError(json.dumps(msgs))
 
 
-
 @pytest.mark.skip(reason="Manually run only.")
-@pytest.mark.parametrize('env_type',('prod',), indirect=True)
+@pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,
     config: CloudConfig,
@@ -324,7 +330,7 @@ def test_stress(
     for n in range(count):
         key = f"compare/stress_{n}.parquet"
         cleanup_list.append(key)
-        key_set.add(f's3://{bucket_name}/{key}')
+        key_set.add(f"s3://{bucket_name}/{key}")
         put_parquet(bucket_name, key, big_tiles_path, config)
 
     failed = []
@@ -357,7 +363,6 @@ def test_stress(
     end_time = dt.datetime.now(dt.timezone.utc)
     lambda_name = "tns_comp_lambda"
 
-
     # collect and print test info
     msgs = []
     pass_fail = True
@@ -382,4 +387,3 @@ def test_stress(
 
     if not pass_fail:
         raise AssertionError(json.dumps(msgs))
-

@@ -131,6 +131,8 @@ def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
         encoding="utf8",
     )
     a = tf.communicate()
+    if a[0] == "":
+        yield {}
     output_json = json.loads(a[0])
     key_vals = {k: v["value"] for k, v in output_json.items()}
     yield key_vals

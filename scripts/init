@@ -22,16 +22,39 @@ rm -rf $TF_PYTHON_DEPS_DIR
 touch $TF_CLI_CONFIG_FILE
 mkdir -p $TF_PLUGIN_CACHE_DIR
 
+set -e
+REGION=$DEFAULT_AWS_REGION
+if [[ "$REGION" == "" ]]
+then
+    read -p "AWS Region: " REGION
+else
+    echo Backend Region: $REGION
+fi
+
+
+BUCKET=$BACKEND_S3_BUCKET
+if [[ "$BUCKET" == "" ]]
+then
+    read -p "S3 Backend Bucket Name: " BUCKET
+else
+    echo Backend Bucket: $BUCKET
+fi
+
 echo "Installing Terraform providers to $TF_PLUGIN_CACHE_DIR"
 cd $SCRIPT_DIR/../terraform
-terraform init --upgrade
+terraform init -upgrade \
+    -backend-config="region=$REGION" \
+    -backend-config="bucket=$BUCKET"
+echo "Locking Providers"
 terraform providers lock
+echo "Making Mirror"
 terraform providers mirror \
     -platform=linux_amd64 \
     -platform=darwin_arm64 \
     -lock-file=False \
     $TF_PLUGIN_CACHE_DIR
 
+echo "Writing terraform cli config to $TF_CLI_CONFIG_FILE"
 echo "
 provider_installation {
   filesystem_mirror {

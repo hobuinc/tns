@@ -1,0 +1,23 @@
+exclude=[
+  ".git",
+  ".github",
+  ".vscode",
+  "terraform"
+]
+
+line-length = 80
+
+[lint]
+select=[
+  "A",
+  "B",
+  "D201",
+  "E",
+  "F",
+  "ISC",
+]
+
+
+[format]
+quote-style = "double"
+indent-style = "space"

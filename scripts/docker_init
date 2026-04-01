@@ -1,23 +1,38 @@
 #!/bin/bash
 
-#### Docker Initialization
+# This script creates the lambda docker image locally and pushes to an ECR in
+# AWS. If the ECR Repo hasn't yet been created, this script will create it for
+# you. Use the printed image uri in the terraform variables to skip ECR and
+# image creation there.
+
+set -e
+if [[ "$1" == "--help" ]]
+then
+    echo "Usage: ./docker_init [REPO]"
+    exit 0
+elif [[ "$1" == "help" ]]
+then
+    echo "Usage: ./docker_init [REPO]"
+    exit 0
+elif [[ "$1" != "" ]]
+then
+    REPO=$1
+else
+    REPO=tns_ecr
+fi
 
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 cd $SCRIPT_DIR
 DOCKER_DIR="../terraform/resources/base/docker"
+DOCKER_HANDLER_DIR="$DOCKER_DIR/handlers"
 ARCH=amd64
 RIE_ARCH=x86_64
-REPO=tns_ecr
 PYTHON_VERSION=3.13
 LAMBDA_IMAGE="amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
 
-set -e
-CONTAINER_NAME="$1"
-if [[ "$CONTAINER_NAME" == "" ]]
-then
-    CONTAINER_NAME="$REPO:$ARCH"
-    echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
-fi
+
+CONTAINER_NAME="$REPO:$ARCH"
+echo "INFO: Setting CONTAINER_NAME to default[$CONTAINER_NAME]"
 
 REGION=$AWS_DEFAULT_REGION
 if [[ "$REGION" == "" ]]
@@ -41,7 +56,7 @@ echo "$COMMAND"
 eval $COMMAND
 
 ECR_REPONAME=$(aws ecr --region $REGION describe-repositories |jq -r '.repositories[] | select (.repositoryName == "'$REPO'").repositoryName')
-echo "Repository found ${ECR_REPONAME}"
+echo "Repository found $ECR_REPONAME"
 
 if [[ "$ECR_REPONAME" == "" ]]
 then
@@ -56,18 +71,18 @@ then
     exit 1
 fi
 
-cp -r "../src/." "$DOCKER_DIR/handlers/"
-cp -r "../src/." "$DOCKER_DIR/handlers/src/"
-echo "Building image architecture ${ARCH} with image $LAMBDA_IMAGE"
-docker buildx build --platform linux/${ARCH} \
+rm -rf "$DOCKER_HANDLER_DIR"
+cp -r "../src/." "$DOCKER_HANDLER_DIR"
+echo "Building image architecture $ARCH with image $LAMBDA_IMAGE"
+docker buildx build --platform linux/$ARCH \
     --build-arg LAMBDA_IMAGE="$LAMBDA_IMAGE" \
     --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
     --build-arg RIE_ARCH=$RIE_ARCH \
     --load \
-    -t ${FULL_CONTAINER_NAME} \
+    -t $FULL_CONTAINER_NAME \
     "$DOCKER_DIR/" \
     -f "$DOCKER_DIR/Dockerfile"
-docker push ${FULL_CONTAINER_NAME}
+docker push $FULL_CONTAINER_NAME
 
 pass_fail=$?
 if [[ $pass_fail == 0 ]]

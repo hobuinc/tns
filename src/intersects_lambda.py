@@ -1,3 +1,11 @@
+"""
+TNS Lambda handler that processes the SNS->SQS Event messages created as a
+result of a Tile Parquet being pushed to S3.
+
+This module uses DuckDB to find the intersect between AOI Subscriptions and
+ingested Tiles and output the results to S3 and to SNS.
+"""
+
 import json
 import os
 
@@ -9,9 +17,12 @@ from uuid import uuid4, UUID
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
+_DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 
 
 class CloudConfig:
+    """Coordinate AWS and DuckDB connections and associated information."""
+
     def __init__(self, region, sns_out_arn, bucket):
         self.region = region
         self.sns_out_arn = sns_out_arn
@@ -21,32 +32,30 @@ class CloudConfig:
         self.s3 = boto3.client("s3", region_name=self.region)
         self.sqs = boto3.client("sqs", region_name=self.region)
 
-        con = duckdb.connect(config={"memory_limit": "2.5GB"})
-        # lambdas can only create files in /tmp
-        con.sql(f"SET extension_directory = '{EXT_PATH}';")
-        con.execute("INSTALL cache_httpfs FROM community; LOAD cache_httpfs")
-        # con.execute("INSTALL httpfs; LOAD httpfs")
-        con.execute("INSTALL spatial; LOAD spatial")
-        con.execute("INSTALL aws; LOAD aws")
-        ex_str = f"""
-            CREATE SECRET (
-                TYPE S3,
-                REGION '{self.region}',
-                PROVIDER CREDENTIAL_CHAIN)
-        """
-        con.execute(ex_str)
+        # Reuse duckdb connection if it's available
+        global _DUCKDB_CONNECTION
+        if _DUCKDB_CONNECTION is None:
+            con = duckdb.connect(config={"memory_limit": "2.5GB"})
+            # lambdas can only create files in /tmp
+            con.sql(f"SET extension_directory = '{EXT_PATH}';")
+            con.execute("INSTALL httpfs; LOAD httpfs")
+            con.execute("INSTALL spatial; LOAD spatial")
+            con.execute("INSTALL aws; LOAD aws")
+            ex_str = f"""
+                CREATE SECRET (
+                    TYPE S3,
+                    REGION '{self.region}',
+                    PROVIDER CREDENTIAL_CHAIN)
+            """
+            con.execute(ex_str)
 
-        self.con = con
+            _DUCKDB_CONNECTION = con
+        self.con = _DUCKDB_CONNECTION
         self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.con.close()
 
 
 def delete_sqs_message(e, config: CloudConfig):
+    """Remove Message from SQS Queue."""
     source_arn = e["eventSourceARN"]
     queue_name = source_arn.split(":")[-1]
     queue_url = config.sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
@@ -57,6 +66,7 @@ def delete_sqs_message(e, config: CloudConfig):
 
 
 def get_data_paths(sqs_event):
+    """Process SQS events and return a list of paths to Tile Parquet in S3."""
     body = json.loads(sqs_event["body"])
     message = json.loads(body["Message"])
     # skip TestEvent
@@ -74,12 +84,14 @@ def get_data_paths(sqs_event):
 def get_pass_res(
     name: UUID, dpaths: list[str], aois: list[str], output_path: str
 ):
+    """Create SNS success message information on impacted AOIS. If the message
+    is too large, recursively split the AOI impact list until it fits."""
     attrs = {
         "source_files": {
             "DataType": "String",
             "StringValue": json.dumps(dpaths),
         },
-        "aoi_list": {
+        "aoi_list": {  # TODO
             "DataType": "String",
             "StringValue": json.dumps(aois),
         },
@@ -88,11 +100,7 @@ def get_pass_res(
     }
     message = f"{name}"
 
-    res = {
-        "MessageAttributes": attrs,
-        "Message": message,
-        "MessageGroupId": "compare",
-    }
+    res = {"MessageAttributes": attrs, "Message": message}
     if json.dumps(res).encode().__sizeof__() > MAX_MSG_BYTES:
         split = int(len(aois) / 2)
         res1 = get_pass_res(name, dpaths, aois[:split], output_path)
@@ -102,6 +110,7 @@ def get_pass_res(
 
 
 def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
+    """Create SNS failed message with error information and source files."""
     res = {
         "MessageAttributes": {
             "source_files": {
@@ -112,12 +121,13 @@ def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
             "error": {"DataType": "String", "StringValue": err_str},
         },
         "Message": f"{name}",
-        "MessageGroupId": "compare",
     }
     return res
 
 
 def apply_compare(datapaths: list[str], config: CloudConfig):
+    """Perform DuckDB Intersect on Tiles and Subscriptions and return DuckDB
+    Relation object."""
     sql = f"""
         SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
             FROM read_parquet("{config.aois_path}") AS aois
@@ -130,10 +140,9 @@ def apply_compare(datapaths: list[str], config: CloudConfig):
 
 
 def push_intersects(
-    ddbi: duckdb.DuckDBPyRelation,
-    datapaths: list[str],
-    config: CloudConfig
+    ddbi: duckdb.DuckDBPyRelation, datapaths: list[str], config: CloudConfig
 ):
+    """Push intersect results as a parquet file to S3."""
     name = uuid4()
     base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
     full_s3_path = f"s3://{base_s3_path}"
@@ -147,6 +156,8 @@ def push_intersects(
 
 
 def get_env_vars(var_name: str):
+    """Handle fetching requirend environment variables and crafting error
+    messages if they're missing."""
     env_keys = os.environ.keys()
 
     if var_name in env_keys:
@@ -158,16 +169,11 @@ def get_env_vars(var_name: str):
         )
 
 
-# Note: aois in db will have pk_and_model attribute that corresponds with GRiD's
-# AOI convention of {ModelPrefix}_{SubscriptionPK}, whereas tiles will also
-# have a pk_and_model attribute, but corresponds with GRiD's Tile convention of
-# {TileModel}_{TilePK}. All aois will come in in EPSG:4326
 def handler(event: dict[str, str], context):
+    """Base Lambda handler method which coordinates SQS message processing and
+    SNS responses in case of errors."""
     sns_out = get_env_vars("SNS_OUT_ARN")
     region = get_env_vars("AWS_REGION")
-
-    # catch any config errors that are created. Can only push errors to sns
-    # if we successfully got the environment variables beforehand
 
     try:
         bucket = get_env_vars("S3_BUCKET")
@@ -179,30 +185,31 @@ def handler(event: dict[str, str], context):
         sns.publish(TopicArn=sns_out, **fail_msg)
         raise e
 
-    with config:
-        try:
-            print("Event:", json.dumps(event))
-            data_paths = []
-            events = event["Records"]
+    try:
+        print("Event:", json.dumps(event))
+        data_paths = []
+        events = event["Records"]
 
-            # collect data paths, delete messages after processing
-            for sqs_event in events:
-                data_paths = data_paths + get_data_paths(sqs_event)
+        # collect data paths, delete messages after processing
+        for sqs_event in events:
+            data_paths = data_paths + get_data_paths(sqs_event)
+        if not data_paths:
+            raise ValueError("At least one tile GeoParquet path is required.")
 
-            # process data paths together
-            intersects = apply_compare(data_paths, config)
-            sns_messages = push_intersects(intersects, data_paths, config)
-            for msg in sns_messages:
-                config.sns.publish(TopicArn=config.sns_out_arn, **msg)
+        # process data paths together
+        intersects = apply_compare(data_paths, config)
+        sns_messages = push_intersects(intersects, data_paths, config)
+        for msg in sns_messages:
+            config.sns.publish(TopicArn=config.sns_out_arn, **msg)
 
-            # delete sqs messages now that we're done
-            for sqs_event in events:
-                delete_sqs_message(sqs_event, config)
+        # delete sqs messages now that we're done
+        for sqs_event in events:
+            delete_sqs_message(sqs_event, config)
 
-            return sns_messages
-        except Exception as e:
-            fail_name = uuid4()
-            exc_str = traceback.format_exc()
-            fail_msg = get_fail_res(fail_name, data_paths, exc_str)
-            config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
-            raise e
+        return sns_messages
+    except Exception as e:
+        fail_name = uuid4()
+        exc_str = traceback.format_exc()
+        fail_msg = get_fail_res(fail_name, data_paths, exc_str)
+        config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
+        raise e

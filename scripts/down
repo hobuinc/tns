@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+STATE_PATH=$(realpath "$SCRIPT_DIR/../terraform/terraform.tfstate")
 
 CMD="terraform destroy"
 

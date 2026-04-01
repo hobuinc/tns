@@ -3,14 +3,16 @@ channels:
   - conda-forge
 dependencies:
   - terraform
+  - jq
   - boto3
+  - awscli
   - python
   - geopandas
   - pyarrow
   - python<3.14
-  - jq
   - gdal
   - libgdal-arrow-parquet
   - duckdb
   - polars
   - polars-st
+  - pytest

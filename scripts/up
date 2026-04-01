@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
+SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
+TF_DIR=$(realpath $SCRIPT_DIR/../terraform/)
+STATE_PATH=$(realpath "$TF_DIR/terraform.tfstate")
+
 CMD="terraform apply"
 
 VAR_PATH=$1
-if [[ "${VAR_PATH}" != "" ]]; then
+if [[ "$VAR_PATH" != "" ]]; then
     VAR_PATH=$(realpath $VAR_PATH)
-    echo "VAR_PATH adjusted to ${VAR_PATH}"
-    CMD="${CMD} --var-file ${VAR_PATH}"
+    echo "VAR_PATH adjusted to $VAR_PATH"
+    CMD="$CMD --var-file $VAR_PATH"
+else
+    read -p "Variable file path? [None]: " INPUT_PATH
+
+    # perform terraform operations
+    if [[ $INPUT_PATH != "" ]]
+    then
+        VAR_PATH=$INPUT_PATH
+        VAR_PATH=$(realpath $VAR_PATH)
+        echo "VAR_PATH adjusted to $VAR_PATH"
+        CMD="$CMD --var-file $VAR_PATH"
+    else
+        echo "Creating architecture with default variables."
+    fi
 fi
-echo $CMD
 
-SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 
-echo $SCRIPT_DIR
-
-cd $SCRIPT_DIR/../terraform
+echo "Executing command $CMD"
+cd $TF_DIR
 eval $CMD

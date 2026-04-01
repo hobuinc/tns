@@ -32,6 +32,8 @@ TNS is split into 4 sections of operation:
 2. Run the TNS Terraform init script.
 
     ```
+    export DEFAULT_AWS_REGION="aws_region"
+    export BACKEND_S3_BUCKET="my_backend_bucket"
     ./scripts/init
     ```
 
@@ -81,6 +83,8 @@ This process will install all of the providers to the default location that `Ter
 To initialize the project, run the `init` script in the `scripts` directory.
 
 ```
+export DEFAULT_AWS_REGION="aws_region"
+export BACKEND_S3_BUCKET="my_backend_bucket"
 ./scripts/init
 ```
 

@@ -32,8 +32,6 @@ TNS is split into 4 sections of operation:
 2. Run the TNS Terraform init script.
 
     ```
-    export DEFAULT_AWS_REGION="aws_region"
-    export BACKEND_S3_BUCKET="my_backend_bucket"
     ./scripts/init
     ```
 
@@ -46,22 +44,11 @@ TNS is split into 4 sections of operation:
     # copy output to ecr_image_uri in your terraform variables file
     ```
 
-4. Duplicate local TNS code to the remote instance by copying to S3 locally.
-
-    ```
-    aws s3 sync {tns_path} s3://{your_bucket}/tns
-    ```
-
 
 #### From the system without internet access
-1. Copy down TNS from S3 to this instance
-    ```
-    aws s3 sync s3://{your_bucket}/tns {tns_path}
-    ```
+1. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.
 
-2. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.
-
-3. Run terraform
+2. Run terraform
     ```
     VAR_PATH="var-file.tfvars" # the path to the variables file
     ./scripts/up $VAR_PATH
@@ -83,8 +70,6 @@ This process will install all of the providers to the default location that `Ter
 To initialize the project, run the `init` script in the `scripts` directory.
 
 ```
-export DEFAULT_AWS_REGION="aws_region"
-export BACKEND_S3_BUCKET="my_backend_bucket"
 ./scripts/init
 ```
 

@@ -18,14 +18,14 @@ TNS is split into 4 sections of operation:
 6. Building Docker Image
 
 
-### Quickstart
+### Quickstart Deployment
 *Before beginning: Make sure system has appropriate permissions (see permissions.json, adjust `account_id` and `aws_region`).*
 
 #### From a system with internet access
 1. Install dependencies using conda.
 
     ```
-    conda env create -f environment.yaml
+    conda env create -f deploy_environment.yaml
     conda activate tns
     ```
 

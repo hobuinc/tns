@@ -23,6 +23,7 @@ module tns_base {
     s3_bucket_name = var.s3_bucket_name
     ecr_image_uri = var.ecr_image_uri
     env = var.env
+    prefix = var.deploy_prefix
 }
 
 module tns_lambdas {
@@ -30,6 +31,7 @@ module tns_lambdas {
     count = var.env == "prod" ? 1 : 0
     source = "./resources/lambdas"
     conda_env_name = var.conda_env_name
+    prefix = var.deploy_prefix
     sts_lambda_role_name = var.sts_lambda_role_name
 
     image_uri = module.tns_base.image_uri
@@ -46,6 +48,11 @@ module tns_lambdas {
 variable aws_region {
     type = string
     default = "us-west-2"
+}
+
+variable deploy_prefix {
+    description = "Differentiate between different deployments on the same bucket."
+    type = string
 }
 
 variable env {
@@ -95,6 +102,9 @@ variable ecr_image_uri {
 
 output env {
     value = var.env
+}
+output prefix {
+    value = var.deploy_prefix
 }
 output aws_region {
     value = var.aws_region

@@ -10,6 +10,10 @@ variable modify_bucket {
     type = bool
 }
 
+variable prefix {
+    type = string
+}
+
 locals {
     bucket_name = (
         var.s3_bucket_name == "" ?
@@ -74,7 +78,7 @@ resource aws_s3_bucket_notification bucket_notification {
     topic {
         topic_arn     = aws_sns_topic.sns_in.arn
         events        = ["s3:ObjectCreated:*"]
-        filter_prefix = "compare/"
+        filter_prefix = "${var.prefix}/compare/"
     }
     depends_on = [aws_sns_topic_policy.sns_in_policy]
 }

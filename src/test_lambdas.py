@@ -34,15 +34,15 @@ def clear_sqs(sqs_arn: str, region: str):
     return messages
 
 
-@pytest.mark.parametrize('env_type',('test',), indirect=True)
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_big(
-    env_type,
+    env_type: str,
     region: str,
     sqs_in: str,
     sqs_out: str,
     big_event: EventType,
     big_aoi_fill: None,
-    env_vars: None
+    env_vars: None,
 ):
     """Test lambda function's ability to coordinate large amounts of data."""
 
@@ -66,17 +66,18 @@ def test_big(
     clear_sqs(sqs_out, region)
 
 
-@pytest.mark.parametrize('env_type',('test',), indirect=True)
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_handler(
-    env_type: str|None,
+    env_type: str,
     sqs_in: str,
     sqs_out: str,
     region: str,
     bucket_name: str,
+    prefix: str,
     event: EventType,
     config: CloudConfig,
     aoi_fill: None,
-    env_vars: None
+    env_vars: None,
 ):
     """
     Test that lambda function is correctly interacting with supporting
@@ -99,7 +100,9 @@ def test_handler(
     assert len(aois) == 50
     source_files = json.loads(attrs["source_files"]["StringValue"])
     assert len(source_files) == 1
-    assert source_files[0] == f"s3://{bucket_name}/compare/geom.parquet"
+    assert (
+        source_files[0] == f"s3://{bucket_name}/{prefix}/compare/geom.parquet"
+    )
     s3_path = attrs["s3_output_path"]["StringValue"]
 
     s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
@@ -111,8 +114,8 @@ def test_handler(
     clear_sqs(sqs_out, region)
 
 
-@pytest.mark.parametrize('env_type',('test',), indirect=True)
-def test_failures(env_type, sqs_out: str, region: str, env_vars: None):
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_failures(env_type: str, sqs_out: str, region: str, env_vars: None):
     """
     Test that lambda function fails in expected ways and advertises those
     errors in the correct way via SQS.

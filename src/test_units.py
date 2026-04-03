@@ -20,7 +20,8 @@ def test_compare(env_type, small_tiles_path: Path, small_aois_path: Path):
     region = "us-west-2"
     sns_out_arn = "fake-sns-arn"
     bucket = "tns-fake-bucket"
-    config = CloudConfig(region, sns_out_arn, bucket)
+    prefix = "fake"
+    config = CloudConfig(region, sns_out_arn, bucket, prefix)
     config.aois_path = small_aois_path.as_posix()
 
     # make comparison and confirm
@@ -42,6 +43,7 @@ def test_fail_res(env_type):
     name = uuid4()
     paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
     err_str = "TypeError('You passed in the wrong type, fix that.')"
+
 
     msg = get_fail_res(name=name, dpaths=paths, err_str=err_str)
     assert "MessageAttributes" in msg
@@ -89,9 +91,10 @@ def test_config(env_type):
     region = "us-east-1"
     sns_arn = "fake-arn::asdf"
     bucket = "fake-bucket"
+    prefix = "fake"
 
-    config = CloudConfig(region, sns_arn, bucket)
+    config = CloudConfig(region, sns_arn, bucket, prefix)
     assert config.region == region
     assert config.sns_out_arn == sns_arn
     assert config.bucket == bucket
-    assert config.aois_path == f"s3://{bucket}/subs/subscriptions.parquet"
+    assert config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"

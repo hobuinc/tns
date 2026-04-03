@@ -23,10 +23,11 @@ _DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
 
-    def __init__(self, region, sns_out_arn, bucket):
+    def __init__(self, region, sns_out_arn, bucket, prefix):
         self.region = region
         self.sns_out_arn = sns_out_arn
         self.bucket = bucket
+        self.prefix = prefix
 
         self.sns = boto3.client("sns", region_name=self.region)
         self.s3 = boto3.client("s3", region_name=self.region)
@@ -51,7 +52,8 @@ class CloudConfig:
 
             _DUCKDB_CONNECTION = con
         self.con = _DUCKDB_CONNECTION
-        self.aois_path = f"s3://{self.bucket}/subs/subscriptions.parquet"
+        sub_key = f"{self.prefix}/subs/subscriptions.parquet"
+        self.aois_path = f"s3://{self.bucket}/{sub_key}"
 
 
 def delete_sqs_message(e, config: CloudConfig):
@@ -144,7 +146,7 @@ def push_intersects(
 ):
     """Push intersect results as a parquet file to S3."""
     name = uuid4()
-    base_s3_path = f"{config.bucket}/intersects/{name}.parquet"
+    base_s3_path = f"{config.bucket}/{config.prefix}/intersects/{name}.parquet"
     full_s3_path = f"s3://{base_s3_path}"
 
     aoi_list = ddbi.pl().get_column("aois").to_list()
@@ -177,7 +179,8 @@ def handler(event: dict[str, str], context):
 
     try:
         bucket = get_env_vars("S3_BUCKET")
-        config = CloudConfig(region, sns_out, bucket)
+        prefix = get_env_vars("DEPLOY_PREFIX")
+        config = CloudConfig(region, sns_out, bucket, prefix)
     except Exception as e:
         sns = boto3.client("sns", region_name=region)
         fail_tb = traceback.format_exc()

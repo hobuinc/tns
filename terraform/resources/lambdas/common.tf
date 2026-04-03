@@ -76,8 +76,8 @@ resource aws_iam_role_policy lambda_policy {
                     "s3:ListObject"
                 ],
                 Resource = [
-                    "arn:aws:s3:::${var.bucket_name}/compare/*.parquet",
-                    "arn:aws:s3:::${var.bucket_name}/subs/*.parquet"
+                    "arn:aws:s3:::${var.bucket_name}/${var.prefix}/compare/*.parquet",
+                    "arn:aws:s3:::${var.bucket_name}/${var.prefix}/subs/*.parquet"
                 ]
             },
             {
@@ -87,7 +87,7 @@ resource aws_iam_role_policy lambda_policy {
                     "s3:PutObject"
                 ],
                 Resource = [
-                    "arn:aws:s3:::${var.bucket_name}/intersects/*.parquet",
+                    "arn:aws:s3:::${var.bucket_name}/${var.prefix}/intersects/*.parquet",
                 ]
             }
         ]

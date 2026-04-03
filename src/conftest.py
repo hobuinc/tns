@@ -133,9 +133,10 @@ def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
     a = tf.communicate()
     if a[0] == "":
         yield {}
-    output_json = json.loads(a[0])
-    key_vals = {k: v["value"] for k, v in output_json.items()}
-    yield key_vals
+    else:
+        output_json = json.loads(a[0])
+        key_vals = {k: v["value"] for k, v in output_json.items()}
+        yield key_vals
 
 
 @pytest.fixture(scope="function")
@@ -159,6 +160,13 @@ def env_type(request, env):
         pytest.skip(
             f"This test requires environment {env}, but {req_env} is active."
         )
+
+
+@pytest.fixture(scope="function")
+def prefix(tf_output: dict[str, str]) -> Fixture[str]:
+    """AWS Region from Terraform output."""
+    yield tf_output["prefix"]
+
 
 @pytest.fixture(scope="function")
 def region(tf_output: dict[str, str]) -> Fixture[str]:
@@ -223,15 +231,18 @@ def cities_path(test_dir: Path) -> Fixture[Path]:
 @pytest.fixture(scope="function")
 def env_vars(tf_output: dict[str, str]) -> None:
     """Push Terraform output to the environment for lamdba code to pull from."""
+    os.environ["DEPLOY_PREFIX"] = tf_output["prefix"]
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
     os.environ["S3_BUCKET"] = tf_output["s3_bucket_name"]
 
 
 @pytest.fixture(scope="function")
-def config(region: str, bucket_name: str, sns_out: str) -> Fixture[CloudConfig]:
+def config(
+    region: str, bucket_name: str, sns_out: str, prefix: str
+) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    yield CloudConfig(region, sns_out, bucket_name)
+    yield CloudConfig(region, sns_out, bucket_name, prefix)
 
 
 @pytest.fixture(scope="function")
@@ -249,7 +260,7 @@ def messages(
     small_tiles_path: Path,
 ) -> Fixture[dict[str, any]]:
     """1 Message grabbed from SQS to craft Events."""
-    key = "compare/geom.parquet"
+    key = f"{config.prefix}/compare/geom.parquet"
     put_parquet(bucket_name, key, small_tiles_path, config)
     messages = get_message(sqs_in, region)
     yield messages
@@ -277,7 +288,7 @@ def big_messages(
     """10 Messages grabbed from SQS to craft Events."""
     amt = 10
     for n in range(amt):
-        key = f"compare/geom_{n}.parquet"
+        key = f"{config.prefix}/compare/geom_{n}.parquet"
         put_parquet(bucket_name, key, big_tiles_path, config)
     messages = []
     retry = 5
@@ -306,7 +317,7 @@ def aoi_fill(
     bucket_name: str, small_aois_path: Path, config: CloudConfig
 ) -> Fixture[None]:
     """Push small subscriptions parquet file to well known path in S3."""
-    key = "subs/subscriptions.parquet"
+    key = f"{config.prefix}/subs/subscriptions.parquet"
     put_parquet(bucket_name, key, small_aois_path, config)
 
 
@@ -317,5 +328,5 @@ def big_aoi_fill(
     config: CloudConfig,
 ) -> Fixture[None]:
     """Push large subscriptions parquet file to well known path in S3."""
-    key = "subs/subscriptions.parquet"
+    key = f"{config.prefix}/subs/subscriptions.parquet"
     put_parquet(bucket_name, key, big_aois_path, config)

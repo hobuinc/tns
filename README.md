@@ -1,5 +1,11 @@
 # Tile Notification System (TNS)
 
+1. [Overview](#overview)
+2. [Installing Dependencies](#installing-dependencies)
+3. [Quickstart Deployment](#quickstart-deployment)
+4. [Infrastructure Management](#infrastructure-management)
+5. [Testing](#testing)
+
 ## Overview
 The Tile Notification System (TNS) creates a group of cloud architecture resources that respond to parquet files being pushed to a S3 bucket. These parquet files represent the latest Tiles to be ingested by GRiD and their associated geometries. TNS will then find the intersection between these Tiles and a set of AOI Subscriptions and return the results via S3.
 
@@ -7,35 +13,26 @@ TNS should be deployable on an AWS EC2 instance with no internet connection (bes
 
 The main vehicle for this project is [Terraform](https://www.terraform.io/), which allows TNS to cohesively deploy and link AWS cloud architecture components together. Terraform's [provider mirror](https://developer.hashicorp.com/terraform/cli/commands/providers/mirror) capability allows projects to create a cache of language information and install from there, rather than reaching out to the Terraform registry over HTTP.
 
-## Getting Started
+### Installing Dependencies
+Create an environment that has packages specified in `environment.yaml`. If you choose to use `conda` for this, run `conda env create -f environment.yaml`. This will create a conda environment with the name `tns`. This environment is only needed on your local machine for the initial installation so that we can install python packages and run `terraform`.
 
-TNS is split into 4 sections of operation:
-1. Installing Dependencies
-2. Quickstart
-3. Initializing
-4. Managing Infrastructure
-5. Testing
-6. Building Docker Image
-
+```
+conda env create -f environment.yaml
+conda activate tns
+```
 
 ### Quickstart Deployment
 *Before beginning: Make sure system has appropriate permissions (see permissions.json, adjust `account_id` and `aws_region`).*
 
 #### From a system with internet access
-1. Install dependencies using conda.
 
-    ```
-    conda env create -f deploy_environment.yaml
-    conda activate tns
-    ```
-
-2. Run the TNS Terraform init script.
+1. Run the TNS Terraform init script.
 
     ```
     ./scripts/init
     ```
 
-3. If deploying docker container *separate* from Terraform, run the `docker_init` script and copy `ecr_image_uri` output to terraform variables. The default value for REPO in `docker_init` will be `tns_ecr`, which would use (or create if it's not made yet) an ECR container named `{account_id}.dkr.ecr.{aws_region}.amazonaws.com/tns_ecr:amd64`.
+2. If deploying docker container *separate* from Terraform, run the `docker_init` script and copy `ecr_image_uri` output to terraform variables. The default value for REPO in `docker_init` will be `tns_ecr`, which would use (or create if it's not made yet) an ECR container named `{account_id}.dkr.ecr.{aws_region}.amazonaws.com/tns_ecr:amd64`.
 
     ```
     export DEFAULT_AWS_REGION="your_region"
@@ -48,21 +45,15 @@ TNS is split into 4 sections of operation:
 #### From the system without internet access
 1. Create `terraform` env file if necessary, see [Set The Environment](#Set-The-Environment) for an example on how to do so.
 
-2. Run terraform
+2. Run terraform with your variables file.
     ```
-    VAR_PATH="var-file.tfvars" # the path to the variables file
+    VAR_PATH=var-file.tfvars # the path to the variables file
     ./scripts/up $VAR_PATH
     ```
 
-**note: This is only for deployment, see [Testing](#testing)
+**note: This is only for production deployment, see [Testing](#testing)
 
-### Installing Dependencies
-Create an environment that has packages specified in `environment.yaml`. If you choose to use `conda` for this, run `conda env create -f environment.yaml`. This will create a conda environment with the name `tns`. This environment is only needed on your local machine for the initial installation so that we can install python packages and run `terraform`.
-
-```
-conda env create -f environment.yaml
-conda activate tns
-```
+## Infrastructure Management
 
 ### Initializing on Local
 This process will install all of the providers to the default location that `Terraform` looks for them, in `.terraform/plugins`. This will also install the necessary python packages into a zip file for usage with the lambda functions that are created. You will need access to the open web for this action.
@@ -95,9 +86,24 @@ This assumes that you have installed `terraform` and are in an environment with 
 
 Note: The file `permissions.json` has the required permissions for the ec2 instance that deploys these cloud resources. The variables `accound_id` and `aws_region` just need to be replaced with the correct variables.
 
-### Infrastructure
+```
+export BACKET_AWS_REGION="my-region"
+export BACKET_S3_BUCKET="my-bucket"
+export BACKET_S3_KEY="my/state/path.tfstate"
+./scripts/init_instance
+```
 
-#### Set the Environment
+Or the script will prompt you for the values.
+
+```
+./scripts/init_instance
+AWS Region: my-region
+S3 Backend Bucket Name: my-bucket
+S3 Backend Key: my/state/path.tfstate
+```
+
+
+### Set the Environment
 
 To use a `terraform` environment file, create a file in the base directory with
 the variables you would like to change.
@@ -126,6 +132,11 @@ Full variable options:
 variable aws_region {
     type = string
     default = "us-west-2"
+}
+
+variable deploy_prefix {
+    description = "Differentiate between different deployments on the same bucket."
+    type = string
 }
 
 variable env {
@@ -171,7 +182,8 @@ variable ecr_image_uri {
 
 ```
 
-#### Deploy Resources
+
+### Deploy Resources
 
 To deploy the cloud infrastructure, run the `up` script with the path to your variables file as the argument. `up` will ask you for a variable path if you don't provide one.
 
@@ -192,12 +204,12 @@ export VAR_PATH="var-file.tfvars"
 > Variable file path? [None]: var-file.tfvars
 ```
 
-#### Destroy Resources
+### Destroy Resources
 
-To destroy the cloud resources, run the `down` script with the path to your variables file as an argument. This will reference `terraforms.tfstate` for the current state of the architecture.
+To destroy the cloud resources, run the `down` script with the path to your variables file as an argument. This will reference the terraform state file that was initialized earlier for the current state of the architecture.
 
 ```
-./scripts/down
+./scripts/down $VAR_PATH
 ```
 
 ### Testing

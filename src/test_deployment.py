@@ -138,6 +138,64 @@ def summarize_lambda_metrics(
     }
 
 
+def stress_test_common(
+    key_set: list[str],
+    cleanup_list: list[str],
+    sqs_out: str,
+    region: str,
+    bucket_name: str,
+    start_time: dt.datetime,
+    max_wait_time: int,
+):
+    failed = []
+    source_file_set = set()
+    s3_out_list = []
+    timeout = time.time()
+    while source_file_set != key_set and time.time() - timeout < max_wait_time:
+        messages = sqs_listen(sqs_out, region, 10)
+        for msg in messages:
+            body = json.loads(msg["Body"])
+
+            attrs = body["MessageAttributes"]
+            status = attrs["status"]["Value"]
+
+            if status == "failed":
+                err = attrs["error"]["Value"]
+                failed.append(err)
+            else:
+                s3_out = attrs["s3_output_path"]["Value"]
+                s3_out_list.append(s3_out)
+                cleanup_list.append(s3_out)
+
+            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
+            source_file_set.update(msg_sfs)
+
+    # seconds to remove from time approx:
+    end_time = dt.datetime.now(dt.timezone.utc)
+    lambda_name = "tns_comp_lambda"
+
+    # collect and print test info
+    msgs = []
+    pass_fail = True
+    missing_sources = sorted(key_set.difference(source_file_set))
+    if missing_sources:
+        pass_fail = False
+        msgs.append([f"Missing files due to timeout: {missing_sources}"])
+
+    metrics = summarize_lambda_metrics(
+        lambda_name, region, start_time, end_time
+    )
+    if failed:
+        pass_fail = False
+        msgs.append(f"Errors from SQS messages: {failed}")
+
+    print(metrics)
+    cleanup_s3_objects(bucket_name, cleanup_list, region)
+
+    if not pass_fail:
+        raise AssertionError(json.dumps(msgs))
+
+
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_lambda(
     env_type,
@@ -158,7 +216,7 @@ def test_lambda(
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
-    key = "compare/geom.parquet"
+    key = f"{config.prefix}/compare/geom.parquet"
 
     filepath = f"s3://{bucket_name}/{key}"
     states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
@@ -238,69 +296,25 @@ def test_many_small_tiles(
     with ThreadPoolExecutor(max_workers=8) as executor:
         for idx in range(count):
             city = cities.loc[idx:idx]
-            key = f"compare/one_tile_{idx}.parquet"
+            key = f"{config.prefix}/compare/one_tile_{idx}.parquet"
             vsis_path = f"/vsis3/{bucket_name}/{key}"
             s3_key = f"s3://{bucket_name}/{key}"
             key_set.add(s3_key)
             cleanup_list.append(key)
             executor.submit(write_one, city, vsis_path)
-
-    failed = []
-    source_file_set = set()
-    s3_out_list = []
     max_wait_time_s = 300  # 5min per 1M
-    timeout = time.time()
-    while (
-        source_file_set != key_set and time.time() - timeout < max_wait_time_s
-    ):
-        messages = sqs_listen(sqs_out, region, 10)
-        for msg in messages:
-            body = json.loads(msg["Body"])
-
-            attrs = body["MessageAttributes"]
-            status = attrs["status"]["Value"]
-
-            if status == "failed":
-                err = attrs["error"]["Value"]
-                failed.append(err)
-            else:
-                s3_out = attrs["s3_output_path"]["Value"]
-                s3_out_list.append(s3_out)
-                cleanup_list.append(s3_out)
-
-            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
-            source_file_set.update(msg_sfs)
-
-    # seconds to remove from time approx:
-    end_time = dt.datetime.now(dt.timezone.utc)
-    lambda_name = "tns_comp_lambda"
-
-    # collect and print test info
-    msgs = []
-    pass_fail = True
-    missing_sources = sorted(key_set.difference(source_file_set))
-    if missing_sources:
-        pass_fail = False
-        msgs.append([f"Missing files due to timeout: {missing_sources}"])
-
-    metrics = summarize_lambda_metrics(
-        lambda_name, region, start_time, end_time
+    stress_test_common(
+        key_set,
+        cleanup_list,
+        sqs_out,
+        region,
+        bucket_name,
+        start_time,
+        max_wait_time_s,
     )
-    if any(metrics["errors"]):
-        pass_fail = False
-        msgs.append(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
-    if failed:
-        pass_fail = False
-        msgs.append(f"Errors from SQS messages: {failed}")
-
-    print(metrics)
-    cleanup_s3_objects(bucket_name, cleanup_list, region)
-
-    if not pass_fail:
-        raise AssertionError(json.dumps(msgs))
 
 
-@pytest.mark.skip(reason="Manually run only.")
+# @pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,
@@ -328,62 +342,18 @@ def test_stress(
     key_set = set()
     cleanup_list = []
     for n in range(count):
-        key = f"compare/stress_{n}.parquet"
+        key = f"{config.prefix}/compare/stress_{n}.parquet"
         cleanup_list.append(key)
         key_set.add(f"s3://{bucket_name}/{key}")
         put_parquet(bucket_name, key, big_tiles_path, config)
 
-    failed = []
-    source_file_set = set()
-    s3_out_list = []
     max_wait_time_s = max(600, 30 * (tile_count / 10**5))  # 5min per 1M
-    timeout = time.time()
-    while (
-        source_file_set != key_set and time.time() - timeout < max_wait_time_s
-    ):
-        messages = sqs_listen(sqs_out, region, 10)
-        for msg in messages:
-            body = json.loads(msg["Body"])
-
-            attrs = body["MessageAttributes"]
-            status = attrs["status"]["Value"]
-
-            if status == "failed":
-                err = attrs["error"]["Value"]
-                failed.append(err)
-            else:
-                s3_out = attrs["s3_output_path"]["Value"]
-                s3_out_list.append(s3_out)
-                cleanup_list.append(s3_out)
-
-            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
-            source_file_set.update(msg_sfs)
-
-    # seconds to remove from time approx:
-    end_time = dt.datetime.now(dt.timezone.utc)
-    lambda_name = "tns_comp_lambda"
-
-    # collect and print test info
-    msgs = []
-    pass_fail = True
-    missing_sources = sorted(key_set.difference(source_file_set))
-    if missing_sources:
-        pass_fail = False
-        msgs.append([f"Missing files due to timeout: {missing_sources}"])
-
-    metrics = summarize_lambda_metrics(
-        lambda_name, region, start_time, end_time
+    stress_test_common(
+        key_set,
+        cleanup_list,
+        sqs_out,
+        region,
+        bucket_name,
+        start_time,
+        max_wait_time_s,
     )
-    if any(metrics["errors"]):
-        pass_fail = False
-        msgs.append(f"Lambda Errors metrics were non-zero: {metrics['errors']}")
-    if failed:
-        pass_fail = False
-        msgs.append(f"Errors from SQS messages: {failed}")
-
-    print(json.dumps(metrics, indent=2))
-
-    cleanup_s3_objects(bucket_name, cleanup_list, region)
-
-    if not pass_fail:
-        raise AssertionError(json.dumps(msgs))

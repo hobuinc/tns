@@ -18,6 +18,7 @@ resource aws_lambda_function compare_function {
         variables = {
             SNS_OUT_ARN: var.sns_out_arn
             S3_BUCKET: var.bucket_name
+            DEPLOY_PREFIX: var.prefix
         }
     }
 

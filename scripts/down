@@ -9,6 +9,19 @@ if [[ $VAR_PATH != "" ]]; then
     VAR_PATH=$(realpath $VAR_PATH)
     echo "VAR_PATH adjusted to ${VAR_PATH}"
     CMD="${CMD} --var-file ${VAR_PATH}"
+else
+    read -p "Variable file path? [None]: " INPUT_PATH
+
+    # perform terraform operations
+    if [[ $INPUT_PATH != "" ]]
+    then
+        VAR_PATH=$INPUT_PATH
+        VAR_PATH=$(realpath $VAR_PATH)
+        echo "VAR_PATH adjusted to $VAR_PATH"
+        CMD="$CMD --var-file $VAR_PATH"
+    else
+        echo "Creating architecture with default variables."
+    fi
 fi
 
 # Tearing down architecture, will prompt for confirmation

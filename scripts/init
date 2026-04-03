@@ -25,7 +25,7 @@ mkdir -p $TF_PLUGIN_CACHE_DIR
 
 echo "Installing Terraform providers to $TF_PLUGIN_CACHE_DIR"
 cd $SCRIPT_DIR/../terraform
-terraform init -upgrade
+terraform init -backend=false
 echo "Locking Providers"
 terraform providers lock
 echo "Making Mirror"

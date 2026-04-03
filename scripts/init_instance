@@ -1,4 +1,34 @@
 SCRIPT_DIR=$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 
+set -e
+REGION=$BACKEND_AWS_REGION
+if [[ "$REGION" == "" ]]
+then
+    read -p "AWS Region: " REGION
+else
+    echo Backend Region: $REGION
+fi
+
+BUCKET=$BACKEND_S3_BUCKET
+if [[ "$BUCKET" == "" ]]
+then
+    read -p "S3 Backend Bucket Name: " BUCKET
+else
+    echo Backend Bucket: $BUCKET
+fi
+
+KEY=$BACKEND_S3_KEY
+if [[ "$KEY" == "" ]]
+then
+    read -p "S3 Backend Key: " KEY
+else
+    echo Backend Bucket: $KEY
+fi
+
 export TF_CLI_CONFIG_FILE=$(realpath $SCRIPT_DIR/../terraform/.terraformrc)
-cd $SCRIPT_DIR/../terraform && terraform init
+cd $SCRIPT_DIR/../terraform && \
+    terraform init \
+        -backend-config="region=$REGION" \
+        -backend-config="bucket=$BUCKET" \
+        -backend-config="key=$KEY"
+

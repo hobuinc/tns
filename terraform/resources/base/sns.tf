@@ -1,7 +1,7 @@
 ####### lambda SNS/SQS In and Out ######
 ########### input resources ############
 resource aws_sns_topic sns_in {
-    name = "tns_compare_sns_in"
+    name = "${var.prefix}_tns_compare_sns_in"
 }
 
 resource aws_sns_topic_policy sns_in_policy {
@@ -27,7 +27,7 @@ data aws_iam_policy_document sns_in_policy_doc {
 }
 
 resource aws_sqs_queue sqs_in {
-    name = "tns_compare_sqs_input"
+    name = "${var.prefix}_tns_compare_sqs_input"
     visibility_timeout_seconds=300
     redrive_policy = jsonencode({
         deadLetterTargetArn = aws_sqs_queue.dlq_in.arn
@@ -36,7 +36,7 @@ resource aws_sqs_queue sqs_in {
 }
 
 resource aws_sqs_queue dlq_in {
-    name = "tns_compare_dlq_in"
+    name = "${var.prefix}_tns_compare_dlq_in"
 }
 
 resource aws_sqs_queue_redrive_allow_policy dlq_in_redrive_policy {
@@ -79,12 +79,11 @@ data aws_iam_policy_document sqs_in_policy_doc {
 
 ########### output resources ############
 resource aws_sns_topic sns_out {
-    name = "tns_compare_sns_output"
-    display_name = "tns_compare_sns_output"
+    name = "${var.prefix}_tns_compare_sns_output"
 }
 
 resource aws_sqs_queue sqs_out {
-    name = "tns_compare_sqs_output"
+    name = "${var.prefix}_tns_compare_sqs_output"
     redrive_policy = jsonencode({
         deadLetterTargetArn = aws_sqs_queue.dlq_out.arn
         maxReceiveCount = 10
@@ -92,11 +91,10 @@ resource aws_sqs_queue sqs_out {
 }
 
 resource aws_sqs_queue dlq_out {
-    name = "tns_compare_dlq_out"
+    name = "${var.prefix}_tns_compare_dlq_out"
 }
 
 resource aws_sqs_queue_redrive_allow_policy out_redrive_allow {
-
     queue_url = aws_sqs_queue.dlq_out.url
     redrive_allow_policy = jsonencode({
         redrivePermission = "byQueue",
@@ -105,14 +103,12 @@ resource aws_sqs_queue_redrive_allow_policy out_redrive_allow {
 }
 
 resource aws_sns_topic_subscription sqs_sns_out_sub {
-
     topic_arn = aws_sns_topic.sns_out.arn
     protocol = "sqs"
     endpoint = aws_sqs_queue.sqs_out.arn
 }
 
 data aws_iam_policy_document sqs_out_policy_doc {
-
     statement {
         principals {
             type = "AWS"
@@ -131,7 +127,6 @@ data aws_iam_policy_document sqs_out_policy_doc {
 }
 
 resource aws_sqs_queue_policy sqs_out_policy {
-
     queue_url = aws_sqs_queue.sqs_out.url
     policy = data.aws_iam_policy_document.sqs_out_policy_doc.json
 }

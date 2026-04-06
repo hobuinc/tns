@@ -1,6 +1,6 @@
 resource aws_lambda_function compare_function {
 
-    function_name = "tns_comp_lambda"
+    function_name = "${var.prefix}_tns_comp_lambda"
     role = (var.sts_lambda_role_name == "" ?
             aws_iam_role.sts_lambda_role[0].arn :
             data.aws_iam_role.sts_lambda_role[0].arn)

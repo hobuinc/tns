@@ -9,7 +9,7 @@ variable env {
 }
 
 locals {
-    ecr_repository_name = "tns_ecr_${uuid()}"
+    ecr_repository_name = "${var.prefix}_tns_ecr"
     platform = "linux/amd64"
     image_tag = "amd64"
     rie_arch = "x86_64"
@@ -75,5 +75,4 @@ data aws_ecr_image runner_image {
 output image_uri {
     value = (var.ecr_image_uri == "" ?
         data.aws_ecr_image.runner_image[0].image_uri : local.image_uri)
-
 }

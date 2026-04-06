@@ -16,7 +16,7 @@ data aws_iam_role sts_lambda_role {
 
 resource aws_iam_role sts_lambda_role {
     count = var.sts_lambda_role_name == "" ? 1 : 0
-    name = "tns_lambda_role"
+    name = "${var.prefix}_tns_lambda_role"
     assume_role_policy = jsonencode({
         Version = "2012-10-17"
         Statement = [
@@ -34,7 +34,7 @@ resource aws_iam_role sts_lambda_role {
 
 resource aws_iam_role_policy lambda_policy {
     count = var.sts_lambda_role_name == "" ? 1 : 0
-    name = "tns_lambda_policy"
+    name = "${var.prefix}_tns_lambda_policy"
     role = aws_iam_role.sts_lambda_role[0].name
     policy = jsonencode({
         Version = "2012-10-17"

@@ -314,7 +314,7 @@ def test_many_small_tiles(
     )
 
 
-# @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,

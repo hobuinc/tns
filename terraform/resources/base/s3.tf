@@ -29,7 +29,7 @@ locals {
 
 resource aws_s3_bucket tns_bucket {
     count = var.s3_bucket_name == "" ? 1 : 0
-    bucket = "tns-geodata-bucket"
+    bucket = "${var.prefix}-tns-geodata-bucket"
 }
 
 resource aws_s3_bucket_lifecycle_configuration action_lifecycles {
@@ -38,10 +38,10 @@ resource aws_s3_bucket_lifecycle_configuration action_lifecycles {
     dynamic rule {
         for_each = ["compare", "intersects"]
         content {
-            id = "${rule.key}_${local.bucket_name}_lifecycle"
+            id = "${var.prefix}_${rule.key}_${local.bucket_name}_lifecycle"
             status = "Enabled"
             filter {
-                prefix = "${rule.key}/"
+                prefix = "${var.prefix}/${rule.key}/"
             }
             expiration {
                 days = 14

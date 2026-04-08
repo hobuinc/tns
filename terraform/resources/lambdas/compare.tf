@@ -5,7 +5,7 @@ resource aws_lambda_function compare_function {
             aws_iam_role.sts_lambda_role[0].arn :
             data.aws_iam_role.sts_lambda_role[0].arn)
     timeout = 300
-    memory_size = 5120
+    memory_size = var.memory_size
 
     image_uri = var.image_uri
     package_type="Image"
@@ -19,6 +19,7 @@ resource aws_lambda_function compare_function {
             SNS_OUT_ARN: var.sns_out_arn
             S3_BUCKET: var.bucket_name
             DEPLOY_PREFIX: var.prefix
+            MEMORY_LIMIT: var.memory_size
         }
     }
 

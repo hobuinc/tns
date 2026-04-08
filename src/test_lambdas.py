@@ -5,6 +5,7 @@ import json
 import shutil
 import time
 import pytest
+from duckdb import OutOfMemoryException
 
 from conftest import EventType
 from intersects_lambda import CloudConfig, handler, EXT_PATH
@@ -96,8 +97,6 @@ def test_handler(
         f"Error in messages: {attrs['error']['StringValue']}"
     )
 
-    aois = json.loads(attrs["aoi_list"]["StringValue"])
-    assert len(aois) == 50
     source_files = json.loads(attrs["source_files"]["StringValue"])
     assert len(source_files) == 1
     assert (
@@ -107,8 +106,7 @@ def test_handler(
 
     s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
     s3_aois = s3_info.pl().get_column("aois").to_list()
-    assert len(aois) == len(s3_aois)
-    assert set(s3_aois) == set(aois)
+    assert len(s3_aois) == 50
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -151,4 +149,130 @@ def test_failures(env_type: str, sqs_out: str, region: str, env_vars: None):
         in a2["error"]["Value"]
     )
 
+    clear_sqs(sqs_out, region)
+
+
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_mem_handle(
+    env_type: str,
+    sqs_in: str,
+    sqs_out: str,
+    region: str,
+    bucket_name: str,
+    prefix: str,
+    mem_test_event: EventType,
+    low_mem_config: CloudConfig,
+    big_aoi_fill: None,
+    env_vars: None,
+):
+    """
+    Test that when memory limits are hit the lambda will attempt to split and
+    rerun.
+    """
+
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
+
+    # set memory to 3GB to force memory problem
+    os.environ["MEMORY_LIMIT"] = "3072"
+
+    aoi_res = handler(mem_test_event, None)
+    assert len(aoi_res) == 2
+
+    for res in aoi_res:
+        attrs = res["MessageAttributes"]
+        assert "error" not in attrs.keys(), (
+            f"Error in messages: {attrs['error']['StringValue']}"
+        )
+
+        source_files = json.loads(attrs["source_files"]["StringValue"])
+        assert len(source_files) == 1
+        assert any(
+            x in set(source_files)
+            for x in [
+                f"s3://{bucket_name}/{prefix}/compare/stress_496.parquet",
+                f"s3://{bucket_name}/{prefix}/compare/stress_494.parquet",
+            ]
+        )
+        s3_path = attrs["s3_output_path"]["StringValue"]
+
+        s3_info = low_mem_config.con.sql(
+            f"select aois from read_parquet('{s3_path}')"
+        )
+        s3_aois = s3_info.pl().get_column("aois").to_list()
+        assert len(s3_aois)
+
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
+
+
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_mem_failure(
+    env_type: str,
+    sqs_in: str,
+    sqs_out: str,
+    region: str,
+    mem_test_event: EventType,
+    big_aoi_fill: None,
+    env_vars: None,
+):
+    """
+    Test that we get failure messages if TNS runs out of memory even after
+    splitting events up.
+    """
+
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
+
+    # set memory to 1GB to force error
+    os.environ["MEMORY_LIMIT"] = "1000"
+
+    with pytest.raises(OutOfMemoryException):
+        handler(mem_test_event, None)
+    fail_messages = clear_sqs(sqs_out, region)
+    for res in fail_messages:
+        res = json.loads(res["Body"])
+        attrs = res["MessageAttributes"]
+        assert "error" in attrs.keys()
+        assert attrs["status"]["Value"] == "failed"
+
+    clear_sqs(sqs_in, region)
+
+
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_945(
+    env_type: str,
+    sqs_in: str,
+    sqs_out: str,
+    region: str,
+    event_945: EventType,
+    bucket_name: str,
+    prefix: str,
+    config: CloudConfig,
+    env_vars
+):
+    """Testing a scenario that can easily have memory problems."""
+    clear_sqs(sqs_in, region)
+    clear_sqs(sqs_out, region)
+
+    aoi_res = handler(event_945, None)
+    assert len(aoi_res) == 1
+
+    for res in aoi_res:
+        attrs = res["MessageAttributes"]
+        assert "error" not in attrs.keys(), (
+            f"Error in messages: {attrs['error']['StringValue']}"
+        )
+
+        source_files = json.loads(attrs["source_files"]["StringValue"])
+        assert len(source_files) == 1
+        s3_path = attrs["s3_output_path"]["StringValue"]
+
+        s3_info = config.con.sql(
+            f"select aois from read_parquet('{s3_path}')"
+        )
+        s3_aois = s3_info.pl().get_column("aois").to_list()
+        assert len(s3_aois)
+
+    clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)

@@ -81,8 +81,8 @@ def put_parquet(
     outpath = f"s3://{bucket}/{key}"
     duck_cmd = f"""
         COPY
-            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO
-            '{outpath}' (FORMAT parquet, COMPRESSION zstd)
+            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO '{outpath}'
+            (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000)
     """
     config.con.sql(duck_cmd)
 
@@ -163,6 +163,12 @@ def env_type(request, env):
 
 
 @pytest.fixture(scope="function")
+def mem_size(tf_output: dict[str, str]) -> Fixture[str]:
+    """Lambda memory size in MB from Terraform output."""
+    yield tf_output["lambda_memory_size"]
+
+
+@pytest.fixture(scope="function")
 def prefix(tf_output: dict[str, str]) -> Fixture[str]:
     """AWS Region from Terraform output."""
     yield tf_output["prefix"]
@@ -219,7 +225,7 @@ def big_aois_path(test_dir: Path) -> Fixture[Path]:
 @pytest.fixture(scope="function")
 def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     """Parquet of 50 USA States duplicated to 1000 tiles."""
-    yield test_dir / "data" / "big_state_tiles.parquet"
+    yield test_dir / "data" / "overture_set.parquet"
 
 
 @pytest.fixture(scope="function")
@@ -235,14 +241,15 @@ def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
     os.environ["S3_BUCKET"] = tf_output["s3_bucket_name"]
+    os.environ["MEMORY_LIMIT"] = str(tf_output["lambda_memory_size"])
 
 
 @pytest.fixture(scope="function")
 def config(
-    region: str, bucket_name: str, sns_out: str, prefix: str
+    region: str, bucket_name: str, sns_out: str, prefix: str, mem_size: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    yield CloudConfig(region, sns_out, bucket_name, prefix)
+    yield CloudConfig( region, sns_out, bucket_name, prefix, mem_size)
 
 
 @pytest.fixture(scope="function")
@@ -321,6 +328,22 @@ def aoi_fill(
     put_parquet(bucket_name, key, small_aois_path, config)
 
 
+def put_big_aoi(
+    bucket: str,
+    key: str,
+    filepath: Path,
+    config: CloudConfig,
+) -> None:
+    """Use DuckDB to copy a parquet file to S3."""
+    outpath = f"s3://{bucket}/{key}"
+    duck_cmd = f"""
+        COPY
+            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO
+            '{outpath}' (FORMAT parquet, COMPRESSION zstd)
+    """
+    config.con.execute(duck_cmd)
+
+
 @pytest.fixture(scope="function")
 def big_aoi_fill(
     bucket_name: str,
@@ -329,4 +352,87 @@ def big_aoi_fill(
 ) -> Fixture[None]:
     """Push large subscriptions parquet file to well known path in S3."""
     key = f"{config.prefix}/subs/subscriptions.parquet"
-    put_parquet(bucket_name, key, big_aois_path, config)
+    put_big_aoi(bucket_name, key, big_aois_path, config)
+
+
+@pytest.fixture(scope="function")
+def stress_945_path(test_dir: Path):
+    yield test_dir / "data" / "stress_945.parquet"
+
+
+@pytest.fixture(scope="function")
+def messages_945(
+    config: CloudConfig,
+    region: str,
+    sqs_in: str,
+    bucket_name: str,
+    stress_945_path: Path,
+) -> Fixture[dict[str, any]]:
+    """1 Message grabbed from SQS to craft Events."""
+    key2 = f"{config.prefix}/compare/stress_945.parquet"
+    put_parquet(bucket_name, key2, stress_945_path, config)
+    messages = get_message(sqs_in, region, 2, retries=5)
+    yield messages
+
+
+@pytest.fixture(scope="function")
+def event_945(
+    messages_945: dict[str, any], sqs_in: str, region: str
+) -> Fixture[EventType]:
+    """Fake events crafted from real SQS messages."""
+    # This is an integration-only fixture that should be skipped if not using
+    # the "test" terraform environment
+    yield get_event(messages_945, sqs_in, region)
+
+
+@pytest.fixture(scope="function")
+def stress_494_path(test_dir: Path):
+    yield test_dir / "data" / "stress_494.parquet"
+
+
+@pytest.fixture(scope="function")
+def stress_496_path(test_dir: Path):
+    yield test_dir / "data" / "stress_494.parquet"
+
+
+@pytest.fixture(scope="function")
+def mem_test_messages(
+    low_mem_config: CloudConfig,
+    region: str,
+    sqs_in: str,
+    bucket_name: str,
+    stress_494_path: Path,
+    stress_496_path: Path,
+) -> Fixture[dict[str, any]]:
+    """1 Message grabbed from SQS to craft Events."""
+    key = f"{low_mem_config.prefix}/compare/stress_494.parquet"
+    put_parquet(bucket_name, key, stress_494_path, low_mem_config)
+    key2 = f"{low_mem_config.prefix}/compare/stress_496.parquet"
+    put_parquet(bucket_name, key2, stress_496_path, low_mem_config)
+    messages = get_message(sqs_in, region, 2, retries=5)
+    retry = 0
+    while len(messages) < 2:
+        if retry > 5:
+            raise ValueError("Unable to get all messages.")
+        retry += 1
+        second = get_message(sqs_in, region, 2, retries=5)
+        messages = messages + second
+    yield messages
+
+
+@pytest.fixture(scope="function")
+def mem_test_event(
+    mem_test_messages: dict[str, any], sqs_in: str, region: str
+) -> Fixture[EventType]:
+    """Fake events crafted from real SQS messages."""
+    # This is an integration-only fixture that should be skipped if not using
+    # the "test" terraform environment
+    yield get_event(mem_test_messages, sqs_in, region)
+
+
+@pytest.fixture(scope="function")
+def low_mem_config(
+    region: str, bucket_name: str, sns_out: str, prefix: str
+) -> Fixture[CloudConfig]:
+    """CloudConfig object made from Terraform output values."""
+    yield CloudConfig(region, sns_out, bucket_name, prefix, 3072)

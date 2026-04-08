@@ -73,7 +73,7 @@ resource aws_iam_role_policy lambda_policy {
                 Effect = "Allow"
                 Action = [
                     "s3:GetObject",
-                    "s3:ListObject"
+                    "s3:ListBucket"
                 ],
                 Resource = [
                     "arn:aws:s3:::${var.bucket_name}/${var.prefix}/compare/*.parquet",

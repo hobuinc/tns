@@ -17,43 +17,58 @@ from uuid import uuid4, UUID
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
-_DUCKDB_CONNECTION: duckdb.DuckDBPyConnection | None = None
 
 
 class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
 
-    def __init__(self, region, sns_out_arn, bucket, prefix):
+    def __init__(self, region, sns_out_arn, bucket, prefix, mem_limit):
         self.region = region
         self.sns_out_arn = sns_out_arn
         self.bucket = bucket
         self.prefix = prefix
+        sub_key = f"{self.prefix}/subs/subscriptions.parquet"
+        self.aois_path = f"s3://{self.bucket}/{sub_key}"
+
+        # mem limit passed in as value of MB (2**20), GB is (2**30), div by
+        # 2**10 for value of GB here
+        shorter = mem_limit / (2**10)
+        self.mem_limit = f"{shorter}GB"
 
         self.sns = boto3.client("sns", region_name=self.region)
         self.s3 = boto3.client("s3", region_name=self.region)
         self.sqs = boto3.client("sqs", region_name=self.region)
+        self.con = None
 
-        # Reuse duckdb connection if it's available
-        global _DUCKDB_CONNECTION
-        if _DUCKDB_CONNECTION is None:
-            con = duckdb.connect(config={"memory_limit": "2.5GB"})
-            # lambdas can only create files in /tmp
-            con.sql(f"SET extension_directory = '{EXT_PATH}';")
-            con.execute("INSTALL httpfs; LOAD httpfs")
-            con.execute("INSTALL spatial; LOAD spatial")
-            con.execute("INSTALL aws; LOAD aws")
-            ex_str = f"""
-                CREATE SECRET (
-                    TYPE S3,
-                    REGION '{self.region}',
-                    PROVIDER CREDENTIAL_CHAIN)
-            """
-            con.execute(ex_str)
 
-            _DUCKDB_CONNECTION = con
-        self.con = _DUCKDB_CONNECTION
-        sub_key = f"{self.prefix}/subs/subscriptions.parquet"
-        self.aois_path = f"s3://{self.bucket}/{sub_key}"
+    def __enter__(self):
+        if self.con is not None:
+            try:
+                self.con.execute('select 1')
+                return self
+            except duckdb.ConnectionException:
+                pass
+
+        con = duckdb.connect()
+        # lambdas can only create files in /tmp
+        con.sql(f"SET extension_directory = '{EXT_PATH}';")
+        con.execute("INSTALL httpfs; LOAD httpfs")
+        con.execute("INSTALL spatial; LOAD spatial")
+        con.execute("INSTALL aws; LOAD aws")
+        con.execute(f"SET memory_limit='{self.mem_limit}'")
+        ex_str = f"""
+            CREATE SECRET (
+                TYPE S3,
+                REGION '{self.region}',
+                PROVIDER CREDENTIAL_CHAIN)
+        """
+        con.execute(ex_str)
+
+        self.con = con
+        return self
+
+    def __exit__(self):
+        self.con.close()
 
 
 def delete_sqs_message(e, config: CloudConfig):
@@ -83,35 +98,28 @@ def get_data_paths(sqs_event):
     return paths
 
 
-def get_pass_res(
-    name: UUID, dpaths: list[str], aois: list[str], output_path: str
-):
+def get_pass_res(dpaths: list[str], output_path: str):
     """Create SNS success message information on impacted AOIS. If the message
     is too large, recursively split the AOI impact list until it fits."""
-    attrs = {
-        "source_files": {
-            "DataType": "String",
-            "StringValue": json.dumps(dpaths),
+
+    res = {
+        "MessageAttributes": {
+            "source_files": {
+                "DataType": "String",
+                "StringValue": json.dumps(dpaths),
+            },
+            "s3_output_path": {
+                "DataType": "String",
+                "StringValue": output_path,
+            },
+            "status": {"DataType": "String", "StringValue": "succeeded"},
         },
-        "aoi_list": {  # TODO
-            "DataType": "String",
-            "StringValue": json.dumps(aois),
-        },
-        "s3_output_path": {"DataType": "String", "StringValue": output_path},
-        "status": {"DataType": "String", "StringValue": "succeeded"},
+        "Message": "succeeded",
     }
-    message = f"{name}"
-
-    res = {"MessageAttributes": attrs, "Message": message}
-    if json.dumps(res).encode().__sizeof__() > MAX_MSG_BYTES:
-        split = int(len(aois) / 2)
-        res1 = get_pass_res(name, dpaths, aois[:split], output_path)
-        res2 = get_pass_res(name, dpaths, aois[split:], output_path)
-        return [*res1, *res2]
-    return [res]
+    return res
 
 
-def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
+def get_fail_res(dpaths: list[str], err_str: str):
     """Create SNS failed message with error information and source files."""
     res = {
         "MessageAttributes": {
@@ -122,39 +130,27 @@ def get_fail_res(name: UUID, dpaths: list[str], err_str: str):
             "status": {"DataType": "String", "StringValue": "failed"},
             "error": {"DataType": "String", "StringValue": err_str},
         },
-        "Message": f"{name}",
+        "Message": "failed",
     }
     return res
 
 
-def apply_compare(datapaths: list[str], config: CloudConfig):
+def apply_compare(datapaths: list[str], config, outpath):
     """Perform DuckDB Intersect on Tiles and Subscriptions and return DuckDB
     Relation object."""
     sql = f"""
-        SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
-            FROM read_parquet("{config.aois_path}") AS aois
+        COPY (
+            SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
+            FROM read_parquet('{config.aois_path}') AS aois
             JOIN read_parquet({datapaths}) AS tiles
             ON ST_Intersects(aois.geometry, tiles.geometry)
             GROUP BY aois.pk_and_model
+        )
+        TO '{outpath}'
+        (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000)
     """
-    ddbi = config.con.sql(sql)
-    return ddbi
-
-
-def push_intersects(
-    ddbi: duckdb.DuckDBPyRelation, datapaths: list[str], config: CloudConfig
-):
-    """Push intersect results as a parquet file to S3."""
-    name = uuid4()
-    base_s3_path = f"{config.bucket}/{config.prefix}/intersects/{name}.parquet"
-    full_s3_path = f"s3://{base_s3_path}"
-
-    aoi_list = ddbi.pl().get_column("aois").to_list()
-    config.con.sql(
-        f"COPY ddbi TO '{full_s3_path}' (FORMAT parquet, COMPRESSION zstd)"
-    )
-
-    return get_pass_res(name, datapaths, aoi_list, full_s3_path)
+    config.con.execute(sql)
+    return get_pass_res(datapaths, outpath)
 
 
 def get_env_vars(var_name: str):
@@ -177,42 +173,65 @@ def handler(event: dict[str, str], context):
     sns_out = get_env_vars("SNS_OUT_ARN")
     region = get_env_vars("AWS_REGION")
 
+    config = None
     try:
         bucket = get_env_vars("S3_BUCKET")
         prefix = get_env_vars("DEPLOY_PREFIX")
-        config = CloudConfig(region, sns_out, bucket, prefix)
+        mem_limit = get_env_vars("MEMORY_LIMIT")
+        mem_limit = int(mem_limit)
+        config = CloudConfig(region, sns_out, bucket, prefix, mem_limit)
     except Exception as e:
         sns = boto3.client("sns", region_name=region)
         fail_tb = traceback.format_exc()
-        fail_msg = get_fail_res(uuid4(), [], fail_tb)
+        fail_msg = get_fail_res([], fail_tb)
         sns.publish(TopicArn=sns_out, **fail_msg)
         raise e
 
+    data_paths = []
     try:
-        print("Event:", json.dumps(event))
-        data_paths = []
+        with config:
+            print("Event:", json.dumps(event))
+            events = event["Records"]
+
+            # collect data paths, delete messages after processing
+            for sqs_event in events:
+                data_paths = data_paths + get_data_paths(sqs_event)
+            if not data_paths:
+                raise ValueError("At least one tile GeoParquet path is required.")
+
+            # process data paths together
+            name = uuid4()
+            base_s3_path = f"{config.bucket}/{config.prefix}/intersects/{name}.parquet"
+            full_s3_path = f"s3://{base_s3_path}"
+            sns_message = apply_compare(data_paths, config, full_s3_path)
+            config.sns.publish(TopicArn=config.sns_out_arn, **sns_message)
+
+            # delete sqs messages now that we're done
+            for sqs_event in events:
+                delete_sqs_message(sqs_event, config)
+
+            # return as list to conform with possibility of needing to split
+            return [ sns_message ]
+    except duckdb.OutOfMemoryException as e:
         events = event["Records"]
+        # if it can't be split further, raise memory error
+        if len(events) == 1:
+            raise e
 
-        # collect data paths, delete messages after processing
-        for sqs_event in events:
-            data_paths = data_paths + get_data_paths(sqs_event)
-        if not data_paths:
-            raise ValueError("At least one tile GeoParquet path is required.")
+        # split into single event runs to see if that alleviates issues
+        try:
+            # reset duckdb connection to reset memory
+            split_events = [{"Records": [e]} for e in events]
+            sns_messages = [ handler(re, None)[0] for re in split_events]
+            return sns_messages
+        except Exception as e:
+            exc_str = traceback.format_exc()
+            fail_msg = get_fail_res(data_paths, exc_str)
+            config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
+            raise e
 
-        # process data paths together
-        intersects = apply_compare(data_paths, config)
-        sns_messages = push_intersects(intersects, data_paths, config)
-        for msg in sns_messages:
-            config.sns.publish(TopicArn=config.sns_out_arn, **msg)
-
-        # delete sqs messages now that we're done
-        for sqs_event in events:
-            delete_sqs_message(sqs_event, config)
-
-        return sns_messages
     except Exception as e:
-        fail_name = uuid4()
         exc_str = traceback.format_exc()
-        fail_msg = get_fail_res(fail_name, data_paths, exc_str)
+        fail_msg = get_fail_res(data_paths, exc_str)
         config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
         raise e

@@ -12,17 +12,22 @@ from intersects_lambda import (
 )
 
 
-@pytest.mark.parametrize('env_type',('unit',), indirect=True)
-def test_compare(env_type, small_tiles_path: Path, small_aois_path: Path):
+# @pytest.mark.parametrize('env_type',('unit',), indirect=True)
+def test_compare(stress_945_path: Path, big_aois_path: Path):
+# def test_compare(env_type, small_tiles_path: Path, small_aois_path: Path):
     """Test that apply_compare returns the correct intersections."""
+    small_aois_path = big_aois_path
+    small_tiles_path = stress_945_path
 
     # make config with fake values and adjust aois_path to local file
     region = "us-west-2"
     sns_out_arn = "fake-sns-arn"
     bucket = "tns-fake-bucket"
     prefix = "fake"
-    config = CloudConfig(region, sns_out_arn, bucket, prefix)
+    mem_limit = 5*(2**10)
+    config = CloudConfig(region, sns_out_arn, bucket, prefix, mem_limit)
     config.aois_path = small_aois_path.as_posix()
+    # config.aois_path = "s3://tns-bucket-premade/kyle/subs/subscriptions.parquet"
 
     # make comparison and confirm
     datapaths = [small_tiles_path.as_posix()]

@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
-from math import ceil
+from math import floor
 from pathlib import Path
 
 import time
@@ -122,19 +122,20 @@ def summarize_lambda_metrics(
         StartTime=start_time,
         EndTime=end_time,
         Period=60,
-        Statistics=["Average", "Sum"],
+        Statistics=["Average", "Sum", "SampleCount"],
     )
     times = [point["Timestamp"] for point in durations["Datapoints"]]
+
     return {
         "errors": [point["Sum"] for point in errors["Datapoints"]],
-        "avg_durations": [
+        "avg_durations_ms": [
             point["Average"] for point in durations["Datapoints"]
         ],
-        "total_lambda_time": sum(
+        "total_lambda_time_ms": sum(
             [point["Sum"] for point in durations["Datapoints"]]
         ),
-        "start_time": min(times),
-        "end_time": max(times),
+        "start_time": min(times) if times else 0,
+        "end_time": max(times) if times else 0,
     }
 
 
@@ -146,54 +147,56 @@ def stress_test_common(
     bucket_name: str,
     start_time: dt.datetime,
     max_wait_time: int,
+    lambda_name: str
 ):
     failed = []
     source_file_set = set()
     s3_out_list = []
     timeout = time.time()
-    while source_file_set != key_set and time.time() - timeout < max_wait_time:
-        messages = sqs_listen(sqs_out, region, 10)
-        for msg in messages:
-            body = json.loads(msg["Body"])
+    try:
+        while source_file_set != key_set and time.time() - timeout < max_wait_time:
+            messages = sqs_listen(sqs_out, region, 10)
+            for msg in messages:
+                body = json.loads(msg["Body"])
 
-            attrs = body["MessageAttributes"]
-            status = attrs["status"]["Value"]
+                attrs = body["MessageAttributes"]
+                status = attrs["status"]["Value"]
 
-            if status == "failed":
-                err = attrs["error"]["Value"]
-                failed.append(err)
-            else:
-                s3_out = attrs["s3_output_path"]["Value"]
-                s3_out_list.append(s3_out)
-                cleanup_list.append(s3_out)
+                if status == "failed":
+                    err = attrs["error"]["Value"]
+                    failed.append(err)
+                else:
+                    s3_out = attrs["s3_output_path"]["Value"]
+                    s3_out_list.append(s3_out)
+                    cleanup_list.append(s3_out)
 
-            msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
-            source_file_set.update(msg_sfs)
+                msg_sfs = set(json.loads(attrs["source_files"]["Value"]))
+                source_file_set.update(msg_sfs)
 
-    # seconds to remove from time approx:
-    end_time = dt.datetime.now(dt.timezone.utc)
-    lambda_name = "tns_comp_lambda"
+        # seconds to remove from time approx:
+        end_time = dt.datetime.now(dt.timezone.utc)
 
-    # collect and print test info
-    msgs = []
-    pass_fail = True
-    missing_sources = sorted(key_set.difference(source_file_set))
-    if missing_sources:
-        pass_fail = False
-        msgs.append([f"Missing files due to timeout: {missing_sources}"])
+        # collect and print test info
+        msgs = []
+        pass_fail = True
+        missing_sources = sorted(key_set.difference(source_file_set))
+        if missing_sources:
+            pass_fail = False
+            msgs.append([f"Missing files due to timeout: {missing_sources}"])
 
-    metrics = summarize_lambda_metrics(
-        lambda_name, region, start_time, end_time
-    )
-    if failed:
-        pass_fail = False
-        msgs.append(f"Errors from SQS messages: {failed}")
+        metrics = summarize_lambda_metrics(
+            lambda_name, region, start_time, end_time
+        )
+        if failed:
+            pass_fail = False
+            msgs.append(f"Errors from SQS messages: {failed}")
 
-    print(metrics)
-    cleanup_s3_objects(bucket_name, cleanup_list, region)
-
-    if not pass_fail:
-        raise AssertionError(json.dumps(msgs))
+        print(metrics)
+        if not pass_fail:
+            raise AssertionError(json.dumps(msgs))
+    except Exception as e:
+        cleanup_s3_objects(bucket_name, cleanup_list, region)
+        raise e
 
 
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
@@ -216,44 +219,43 @@ def test_lambda(
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
-    key = f"{config.prefix}/compare/geom.parquet"
+    try:
+        key = f"{config.prefix}/compare/geom.parquet"
 
-    filepath = f"s3://{bucket_name}/{key}"
-    states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
+        filepath = f"s3://{bucket_name}/{key}"
+        states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
 
-    put_parquet(bucket_name, key, small_tiles_path, config)
+        put_parquet(bucket_name, key, small_tiles_path, config)
 
-    messages = sqs_listen(sqs_out, region)
-    # if lambda is cold started it can take an extra cycle
-    if not messages:
         messages = sqs_listen(sqs_out, region)
-    assert len(messages) == 1
-    m = messages[0]
+        # if lambda is cold started it can take an extra cycle
+        if not messages:
+            messages = sqs_listen(sqs_out, region)
+        assert len(messages) == 1
+        m = messages[0]
 
-    message = json.loads(m["Body"])
-    attrs = message["MessageAttributes"]
+        message = json.loads(m["Body"])
+        attrs = message["MessageAttributes"]
 
-    status = attrs["status"]["Value"]
-    assert status == "succeeded", (
-        f"Error from SQS {message['MessageAttributes']['error']['Value']}"
-    )
+        status = attrs["status"]["Value"]
+        assert status == "succeeded", (
+            f"Error from SQS {message['MessageAttributes']['error']['Value']}"
+        )
 
-    msg_states = json.loads(attrs["aoi_list"]["Value"])
-    assert len(msg_states) == len(states)
-    assert set(msg_states) == set(states)
+        source_file = json.loads(attrs["source_files"]["Value"])
+        assert len(source_file) == 1
+        assert source_file[0] == filepath
 
-    source_file = json.loads(attrs["source_files"]["Value"])
-    assert len(source_file) == 1
-    assert source_file[0] == filepath
+        s3_path = attrs["s3_output_path"]["Value"]
+        s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
+        s3_aois = s3_info.pl().get_column("aois").to_list()
+        assert len(s3_aois) == len(states)
+        assert set(s3_aois) == set(states)
 
-    s3_path = attrs["s3_output_path"]["Value"]
-    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-    s3_aois = s3_info.pl().get_column("aois").to_list()
-    assert len(s3_aois) == len(states)
-    assert set(s3_aois) == set(states)
-
-    clear_sqs(sqs_out, region)
-    clear_sqs(sqs_in, region)
+    except Exception as e:
+        clear_sqs(sqs_out, region)
+        clear_sqs(sqs_in, region)
+        raise e
 
 
 @pytest.mark.skip(reason="Manually run only.")
@@ -277,44 +279,49 @@ def test_many_small_tiles(
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
-    count = 200
-    start_time = dt.datetime.now(dt.timezone.utc)
-    key_set = set()
-    cleanup_list = []
-    cities_cmd = f"""
-        select id as pk_and_model, geometry
-            from read_parquet('{cities_path.as_posix()}')
-    """
+    try:
+        count = 200
+        start_time = dt.datetime.now(dt.timezone.utc)
+        key_set = set()
+        cleanup_list = []
+        cities_cmd = f"""
+            select id as pk_and_model, geometry
+                from read_parquet('{cities_path.as_posix()}')
+        """
 
-    cities = config.con.execute(cities_cmd).fetch_df()
+        cities = config.con.execute(cities_cmd).fetch_df()
 
-    def write_one(city, vsis_path):
-        gdf = st.GeoDataFrame(city, geometry_format="wkb", strict=True)
-        gdf = gdf.with_columns(st.geom().st.set_srid(4326))
-        gdf.st.write_file(path=vsis_path, driver="PARQUET", compression="zstd")
+        def write_one(city, vsis_path):
+            gdf = st.GeoDataFrame(city, geometry_format="wkb", strict=True)
+            gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+            gdf.st.write_file(path=vsis_path, driver="PARQUET", compression="zstd")
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        for idx in range(count):
-            city = cities.loc[idx:idx]
-            key = f"{config.prefix}/compare/one_tile_{idx}.parquet"
-            vsis_path = f"/vsis3/{bucket_name}/{key}"
-            s3_key = f"s3://{bucket_name}/{key}"
-            key_set.add(s3_key)
-            cleanup_list.append(key)
-            executor.submit(write_one, city, vsis_path)
-    max_wait_time_s = 300  # 5min per 1M
-    stress_test_common(
-        key_set,
-        cleanup_list,
-        sqs_out,
-        region,
-        bucket_name,
-        start_time,
-        max_wait_time_s,
-    )
+        with ThreadPoolExecutor() as executor:
+            for idx in range(count):
+                city = cities.loc[idx:idx]
+                key = f"{config.prefix}/compare/one_tile_{idx}.parquet"
+                vsis_path = f"/vsis3/{bucket_name}/{key}"
+                s3_key = f"s3://{bucket_name}/{key}"
+                key_set.add(s3_key)
+                cleanup_list.append(key)
+                executor.submit(write_one, city, vsis_path)
+        max_wait_time_s = 300  # 5min per 1M
+        stress_test_common(
+            key_set,
+            cleanup_list,
+            sqs_out,
+            region,
+            bucket_name,
+            start_time,
+            max_wait_time_s,
+        )
+    except Exception as e:
+        clear_sqs(sqs_out, region)
+        clear_sqs(sqs_in, region)
+        raise e
 
 
-@pytest.mark.skip(reason="Manually run only.")
+# @pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,
@@ -325,6 +332,7 @@ def test_stress(
     sqs_in: str,
     big_aoi_fill: None,
     big_tiles_path: Path,
+    prefix: str
 ):
     """
     Stress test the environment by sending 1k files with 1k tiles in them and
@@ -334,26 +342,45 @@ def test_stress(
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
 
-    tile_count = 10**6
-    batch_size = 1000
-    count = ceil(tile_count / batch_size)
-    print(f"creating {count} files.")
-    start_time = dt.datetime.now(dt.timezone.utc)
-    key_set = set()
-    cleanup_list = []
-    for n in range(count):
-        key = f"{config.prefix}/compare/stress_{n}.parquet"
-        cleanup_list.append(key)
-        key_set.add(f"s3://{bucket_name}/{key}")
-        put_parquet(bucket_name, key, big_tiles_path, config)
+    try:
 
-    max_wait_time_s = max(600, 30 * (tile_count / 10**5))  # 5min per 1M
-    stress_test_common(
-        key_set,
-        cleanup_list,
-        sqs_out,
-        region,
-        bucket_name,
-        start_time,
-        max_wait_time_s,
-    )
+        tile_count = 1074405
+        batch_size = 1000
+        count = floor(tile_count / batch_size)
+        print(f"creating {count} files.")
+        start_time = dt.datetime.now(dt.timezone.utc)
+        key_set = set()
+        cleanup_list = []
+
+        n = 0
+        gdf = st.read_file(big_tiles_path)
+        gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+        def write_file(sl, vsis_path):
+            sl.st.write_file(vsis_path, driver="PARQUET", compression="zstd")
+
+        with ThreadPoolExecutor() as executor:
+            for sl in gdf.iter_slices(1000):
+                key = f"{config.prefix}/compare/stress_{n}.parquet"
+                vsis_path = f"/vsis3/{config.bucket}/{key}"
+                cleanup_list.append(key)
+                s3path = f"s3://{bucket_name}/{key}"
+                key_set.add(s3path)
+                n = n + 1
+                executor.submit(write_file, sl=sl, vsis_path=vsis_path)
+
+        max_wait_time_s = max(600, 30 * (tile_count / 10**5))  # 5min per 1M
+        lambda_name = f"{prefix}_tns_comp_lambda"
+        stress_test_common(
+            key_set,
+            cleanup_list,
+            sqs_out,
+            region,
+            bucket_name,
+            start_time,
+            max_wait_time_s,
+            lambda_name
+        )
+    except Exception as e:
+        clear_sqs(sqs_out, region)
+        clear_sqs(sqs_in, region)
+        raise e

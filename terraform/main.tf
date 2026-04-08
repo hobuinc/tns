@@ -33,6 +33,7 @@ module tns_lambdas {
     conda_env_name = var.conda_env_name
     prefix = var.deploy_prefix
     sts_lambda_role_name = var.sts_lambda_role_name
+    memory_size = var.lambda_memory_size
 
     image_uri = module.tns_base.image_uri
     bucket_name = module.tns_base.s3_bucket_name
@@ -77,6 +78,11 @@ variable sts_lambda_role_name {
     type = string
     default = ""
 }
+variable lambda_memory_size {
+    description="Set the memory size of the lambda function."
+    type = number
+    default = 10240
+}
 
 variable s3_bucket_name {
     description="Name of previously created S3 bucket."
@@ -112,6 +118,10 @@ output aws_region {
 output s3_bucket_name {
     value = module.tns_base.s3_bucket_name
 }
+output lambda_memory_size {
+    value = var.lambda_memory_size
+}
+
 
 #comp
 output sqs_out {

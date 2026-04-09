@@ -8,7 +8,7 @@ import pytest
 from duckdb import OutOfMemoryException
 
 from conftest import EventType
-from intersects_lambda import CloudConfig, handler, EXT_PATH
+from intersects_lambda import CloudConfig, handler
 
 
 def clear_sqs(sqs_arn: str, region: str):
@@ -49,8 +49,6 @@ def test_big(
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
-
-    shutil.rmtree(EXT_PATH)
 
     time1 = time.time()
     aois = handler(big_event, None)

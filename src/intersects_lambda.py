@@ -16,7 +16,6 @@ import traceback
 from uuid import uuid4
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
-EXT_PATH = "/tmp/.duck_extensions"
 
 
 class CloudConfig:
@@ -51,10 +50,9 @@ class CloudConfig:
 
         con = duckdb.connect()
         # lambdas can only create files in /tmp
-        con.sql(f"SET extension_directory = '{EXT_PATH}';")
-        con.execute("INSTALL httpfs; LOAD httpfs")
-        con.execute("INSTALL spatial; LOAD spatial")
-        con.execute("INSTALL aws; LOAD aws")
+        con.execute("LOAD httpfs")
+        con.execute("LOAD spatial")
+        con.execute("LOAD aws")
         con.execute(f"SET memory_limit='{self.mem_limit}'")
         ex_str = f"""
             CREATE SECRET (

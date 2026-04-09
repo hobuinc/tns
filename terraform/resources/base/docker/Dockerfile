@@ -71,4 +71,8 @@ COPY handlers/ /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda
 RUN rm -rf /var/task/lib/python${PYTHON_VERSION}/site-packages/tns_lambda/handlers/data
 # COPY handlers/config.py /var/task/
 COPY root-bashrc /root/.bashrc
+
+COPY duck_setup.sql duck_setup.sql
+RUN duckdb < duck_setup.sql
+
 ENTRYPOINT [ "/var/task/python-entry.sh" ]

@@ -139,6 +139,12 @@ variable deploy_prefix {
     type = string
 }
 
+variable lambda_memory_size {
+    description="Set the memory size of the lambda function in MBs."
+    type = number
+    default = 10240
+}
+
 variable env {
     description="Determines which set of resources are created."
     type = string
@@ -155,7 +161,6 @@ variable conda_env_name {
     default = "tns"
 }
 
-#defaults of "" allow easier conditionals
 variable sts_lambda_role_name {
     description="Name of previously created IAM role for Compare lambda function."
     type = string

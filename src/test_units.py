@@ -2,7 +2,7 @@ import json
 from uuid import uuid4
 from pathlib import Path
 import polars_st as st
-import pytest
+from tempfile import NamedTemporaryFile
 
 from intersects_lambda import (
     CloudConfig,
@@ -12,12 +12,8 @@ from intersects_lambda import (
 )
 
 
-# @pytest.mark.parametrize('env_type',('unit',), indirect=True)
-def test_compare(stress_945_path: Path, big_aois_path: Path):
-# def test_compare(env_type, small_tiles_path: Path, small_aois_path: Path):
+def test_compare(small_tiles_path: Path, small_aois_path: Path):
     """Test that apply_compare returns the correct intersections."""
-    small_aois_path = big_aois_path
-    small_tiles_path = stress_945_path
 
     # make config with fake values and adjust aois_path to local file
     region = "us-west-2"
@@ -27,30 +23,35 @@ def test_compare(stress_945_path: Path, big_aois_path: Path):
     mem_limit = 5*(2**10)
     config = CloudConfig(region, sns_out_arn, bucket, prefix, mem_limit)
     config.aois_path = small_aois_path.as_posix()
-    # config.aois_path = "s3://tns-bucket-premade/kyle/subs/subscriptions.parquet"
 
-    # make comparison and confirm
-    datapaths = [small_tiles_path.as_posix()]
-    intersects = apply_compare(datapaths, config)
-    int_pl = intersects.pl().get_column("aois").to_list()
-    assert len(int_pl) == 50
+    with config:
+        with NamedTemporaryFile() as tempfile:
 
-    local_gdf = (
-        st.read_file(small_aois_path).get_column("pk_and_model").to_list()
-    )
+            # make comparison and confirm
+            datapaths = [small_tiles_path.as_posix()]
+            res = apply_compare(datapaths, config, tempfile.name)
+            attrs = res['MessageAttributes']
 
-    assert set(int_pl) == set(local_gdf)
+            source_files = json.loads(attrs['source_files']['StringValue'])
+            assert source_files == datapaths
+
+            assert attrs['s3_output_path']['StringValue']
+            assert tempfile.name == attrs['s3_output_path']['StringValue']
+
+            int_pl = st.read_file(tempfile.name).get_column("aois").to_list()
+
+            local_gdf = (st.read_file(small_aois_path).get_column("pk_and_model").to_list())
+
+            assert set(int_pl) == set(local_gdf)
 
 
-@pytest.mark.parametrize('env_type',('unit',), indirect=True)
-def test_fail_res(env_type):
+def test_fail_res():
     """Test that failure responses are returned in expected structures."""
-    name = uuid4()
     paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
     err_str = "TypeError('You passed in the wrong type, fix that.')"
 
 
-    msg = get_fail_res(name=name, dpaths=paths, err_str=err_str)
+    msg = get_fail_res(dpaths=paths, err_str=err_str)
     assert "MessageAttributes" in msg
 
     attrs = msg["MessageAttributes"]
@@ -63,33 +64,38 @@ def test_fail_res(env_type):
     assert json.loads(attrs["source_files"]["StringValue"]) == paths
 
 
-@pytest.mark.parametrize('env_type',('unit',), indirect=True)
-def test_pass_res(env_type):
+def test_pass_res():
     """
     Test that passing responses are returned in expected structures, and that
     when responses are too large from lists of AOIs those responses are split.
     """
     paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
 
-    # basic
-    pass_list = ["0123456789" for n in range(15000)]
-    res_passes = get_pass_res(uuid4(), paths, pass_list, paths[0])
-    assert len(res_passes) == 1
+    res = get_pass_res(paths, paths[0])
 
-    # splitting
-    split_list = ["0123456789" for n in range(20000)]
-    res_splits = get_pass_res(uuid4(), paths, split_list, paths[0])
-    assert len(res_splits) == 2
+    assert "Message" in res
+    assert res["Message"] == "succeeded"
 
-    # test that large values don't return nested results
-    big_list = ["0123456789" for n in range(10**6)]
-    big_splits = get_pass_res(uuid4(), paths, big_list, paths[0])
-    types = [not isinstance(n, list) for n in big_splits]
-    assert all(types)
+    assert 'MessageAttributes' in res
+    attrs = res['MessageAttributes']
+    assert all(x in attrs for x in ["source_files", "s3_output_path", "status"])
+
+    assert "StringValue" in attrs["source_files"]
+    assert "DataType" in attrs["source_files"]
+    source_files = json.loads(attrs['source_files']['StringValue'])
+    assert source_files == paths
 
 
-@pytest.mark.parametrize('env_type',('unit',), indirect=True)
-def test_config(env_type):
+    assert "StringValue" in attrs["s3_output_path"]
+    assert "DataType" in attrs["s3_output_path"]
+    assert paths[0] == attrs['s3_output_path']['StringValue']
+
+    assert "StringValue" in attrs["status"]
+    assert "DataType" in attrs["status"]
+    assert attrs['status']['StringValue'] == "succeeded"
+
+
+def test_config():
     """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
@@ -98,8 +104,15 @@ def test_config(env_type):
     bucket = "fake-bucket"
     prefix = "fake"
 
-    config = CloudConfig(region, sns_arn, bucket, prefix)
+    mem_limit = 5*(2**10)
+    config = CloudConfig(region, sns_arn, bucket, prefix, mem_limit)
     assert config.region == region
     assert config.sns_out_arn == sns_arn
     assert config.bucket == bucket
     assert config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"
+    assert config.mem_limit == '5.0GB'
+    with config:
+        a = config.con.sql('select 1')
+        assert a.pl().get_column("1").to_list()[0] == 1
+
+    assert config.con is None

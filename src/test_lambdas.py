@@ -43,7 +43,7 @@ def test_big(
     sqs_out: str,
     big_event: EventType,
     big_aoi_fill: None,
-    env_vars: None,
+    env_vars: None
 ):
     """Test lambda function's ability to coordinate large amounts of data."""
 
@@ -56,12 +56,15 @@ def test_big(
     aois = handler(big_event, None)
     res_time = time.time() - time1
     assert res_time < 500
-    assert len(aois)
+    assert len(aois) == 1
     for aoi_res in aois:
         attrs = aoi_res["MessageAttributes"]
 
         status = attrs["status"]["StringValue"]
         assert status == "succeeded", json.dumps(attrs["error"])
+
+        sources = json.loads(attrs['source_files']['StringValue'])
+        assert len(sources) == 10
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -104,9 +107,10 @@ def test_handler(
     )
     s3_path = attrs["s3_output_path"]["StringValue"]
 
-    s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-    s3_aois = s3_info.pl().get_column("aois").to_list()
-    assert len(s3_aois) == 50
+    with config:
+        s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
+        s3_aois = s3_info.pl().get_column("aois").to_list()
+        assert len(s3_aois) == 50
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -195,12 +199,12 @@ def test_mem_handle(
             ]
         )
         s3_path = attrs["s3_output_path"]["StringValue"]
-
-        s3_info = low_mem_config.con.sql(
-            f"select aois from read_parquet('{s3_path}')"
-        )
-        s3_aois = s3_info.pl().get_column("aois").to_list()
-        assert len(s3_aois)
+        with low_mem_config:
+            s3_info = low_mem_config.con.sql(
+                f"select aois from read_parquet('{s3_path}')"
+            )
+            s3_aois = s3_info.pl().get_column("aois").to_list()
+            assert len(s3_aois)
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
@@ -246,8 +250,6 @@ def test_945(
     sqs_out: str,
     region: str,
     event_945: EventType,
-    bucket_name: str,
-    prefix: str,
     config: CloudConfig,
     env_vars
 ):
@@ -268,11 +270,12 @@ def test_945(
         assert len(source_files) == 1
         s3_path = attrs["s3_output_path"]["StringValue"]
 
-        s3_info = config.con.sql(
-            f"select aois from read_parquet('{s3_path}')"
-        )
-        s3_aois = s3_info.pl().get_column("aois").to_list()
-        assert len(s3_aois)
+        with config:
+            s3_info = config.con.sql(
+                f"select aois from read_parquet('{s3_path}')"
+            )
+            s3_aois = s3_info.pl().get_column("aois").to_list()
+            assert len(s3_aois)
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)

@@ -4,6 +4,8 @@ from typing import Generator, TypeVar
 import pytest
 import json
 import boto3
+import duckdb
+import polars_st as st
 
 from pathlib import Path
 from time import sleep
@@ -75,16 +77,14 @@ def put_parquet(
     bucket: str,
     key: str,
     filepath: Path,
-    config: CloudConfig,
 ) -> None:
-    """Use DuckDB to copy a parquet file to S3."""
-    outpath = f"s3://{bucket}/{key}"
-    duck_cmd = f"""
-        COPY
-            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO '{outpath}'
-            (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000)
-    """
-    config.con.sql(duck_cmd)
+    """Use polars_st to copy a parquet file to S3."""
+    outpath = f"/vsis3/{bucket}/{key}"
+    local = st.read_file(filepath)
+    local = local.with_columns(st.geom().st.set_srid(4326))
+    local.st.write_file(
+        outpath, driver="PARQUET", compression="zstd", row_group_size=100000
+    )
 
 
 def get_event(messages: dict[str, any], sqs_arn: str, region: str) -> EventType:
@@ -225,8 +225,12 @@ def big_aois_path(test_dir: Path) -> Fixture[Path]:
 @pytest.fixture(scope="function")
 def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     """Parquet of 50 USA States duplicated to 1000 tiles."""
-    yield test_dir / "data" / "overture_set.parquet"
+    yield test_dir / "data" / "big_state_tiles.parquet"
 
+@pytest.fixture(scope="function")
+def overture_tiles_path(test_dir: Path) -> Fixture[Path]:
+    """Parquet of 50 USA States duplicated to 1000 tiles."""
+    yield test_dir / "data" / "overture_set.parquet"
 
 @pytest.fixture(scope="function")
 def cities_path(test_dir: Path) -> Fixture[Path]:
@@ -249,7 +253,7 @@ def config(
     region: str, bucket_name: str, sns_out: str, prefix: str, mem_size: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    yield CloudConfig( region, sns_out, bucket_name, prefix, mem_size)
+    yield CloudConfig(region, sns_out, bucket_name, prefix, mem_size)
 
 
 @pytest.fixture(scope="function")
@@ -268,7 +272,7 @@ def messages(
 ) -> Fixture[dict[str, any]]:
     """1 Message grabbed from SQS to craft Events."""
     key = f"{config.prefix}/compare/geom.parquet"
-    put_parquet(bucket_name, key, small_tiles_path, config)
+    put_parquet(bucket_name, key, small_tiles_path)
     messages = get_message(sqs_in, region)
     yield messages
 
@@ -296,7 +300,7 @@ def big_messages(
     amt = 10
     for n in range(amt):
         key = f"{config.prefix}/compare/geom_{n}.parquet"
-        put_parquet(bucket_name, key, big_tiles_path, config)
+        put_parquet(bucket_name, key, big_tiles_path)
     messages = []
     retry = 5
     count = 0
@@ -325,23 +329,7 @@ def aoi_fill(
 ) -> Fixture[None]:
     """Push small subscriptions parquet file to well known path in S3."""
     key = f"{config.prefix}/subs/subscriptions.parquet"
-    put_parquet(bucket_name, key, small_aois_path, config)
-
-
-def put_big_aoi(
-    bucket: str,
-    key: str,
-    filepath: Path,
-    config: CloudConfig,
-) -> None:
-    """Use DuckDB to copy a parquet file to S3."""
-    outpath = f"s3://{bucket}/{key}"
-    duck_cmd = f"""
-        COPY
-            (SELECT * FROM read_parquet('{filepath.as_posix()}')) TO
-            '{outpath}' (FORMAT parquet, COMPRESSION zstd)
-    """
-    config.con.execute(duck_cmd)
+    put_parquet(bucket_name, key, small_aois_path)
 
 
 @pytest.fixture(scope="function")
@@ -352,7 +340,7 @@ def big_aoi_fill(
 ) -> Fixture[None]:
     """Push large subscriptions parquet file to well known path in S3."""
     key = f"{config.prefix}/subs/subscriptions.parquet"
-    put_big_aoi(bucket_name, key, big_aois_path, config)
+    put_parquet(bucket_name, key, big_aois_path)
 
 
 @pytest.fixture(scope="function")
@@ -370,7 +358,7 @@ def messages_945(
 ) -> Fixture[dict[str, any]]:
     """1 Message grabbed from SQS to craft Events."""
     key2 = f"{config.prefix}/compare/stress_945.parquet"
-    put_parquet(bucket_name, key2, stress_945_path, config)
+    put_parquet(bucket_name, key2, stress_945_path)
     messages = get_message(sqs_in, region, 2, retries=5)
     yield messages
 
@@ -406,9 +394,9 @@ def mem_test_messages(
 ) -> Fixture[dict[str, any]]:
     """1 Message grabbed from SQS to craft Events."""
     key = f"{low_mem_config.prefix}/compare/stress_494.parquet"
-    put_parquet(bucket_name, key, stress_494_path, low_mem_config)
+    put_parquet(bucket_name, key, stress_494_path)
     key2 = f"{low_mem_config.prefix}/compare/stress_496.parquet"
-    put_parquet(bucket_name, key2, stress_496_path, low_mem_config)
+    put_parquet(bucket_name, key2, stress_496_path)
     messages = get_message(sqs_in, region, 2, retries=5)
     retry = 0
     while len(messages) < 2:

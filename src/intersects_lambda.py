@@ -13,7 +13,7 @@ import boto3
 import duckdb
 import traceback
 
-from uuid import uuid4, UUID
+from uuid import uuid4
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 EXT_PATH = "/tmp/.duck_extensions"
@@ -67,8 +67,9 @@ class CloudConfig:
         self.con = con
         return self
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         self.con.close()
+        self.con = None
 
 
 def delete_sqs_message(e, config: CloudConfig):
@@ -220,7 +221,6 @@ def handler(event: dict[str, str], context):
 
         # split into single event runs to see if that alleviates issues
         try:
-            # reset duckdb connection to reset memory
             split_events = [{"Records": [e]} for e in events]
             sns_messages = [ handler(re, None)[0] for re in split_events]
             return sns_messages

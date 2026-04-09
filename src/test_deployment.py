@@ -147,14 +147,16 @@ def stress_test_common(
     bucket_name: str,
     start_time: dt.datetime,
     max_wait_time: int,
-    lambda_name: str
+    lambda_name: str,
 ):
     failed = []
     source_file_set = set()
     s3_out_list = []
     timeout = time.time()
     try:
-        while source_file_set != key_set and time.time() - timeout < max_wait_time:
+        while (
+            source_file_set != key_set and time.time() - timeout < max_wait_time
+        ):
             messages = sqs_listen(sqs_out, region, 10)
             for msg in messages:
                 body = json.loads(msg["Body"])
@@ -223,9 +225,11 @@ def test_lambda(
         key = f"{config.prefix}/compare/geom.parquet"
 
         filepath = f"s3://{bucket_name}/{key}"
-        states = st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
+        states = (
+            st.read_file(small_aois_path).to_pandas().pk_and_model.to_list()
+        )
 
-        put_parquet(bucket_name, key, small_tiles_path, config)
+        put_parquet(bucket_name, key, small_tiles_path)
 
         messages = sqs_listen(sqs_out, region)
         # if lambda is cold started it can take an extra cycle
@@ -246,11 +250,14 @@ def test_lambda(
         assert len(source_file) == 1
         assert source_file[0] == filepath
 
-        s3_path = attrs["s3_output_path"]["Value"]
-        s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-        s3_aois = s3_info.pl().get_column("aois").to_list()
-        assert len(s3_aois) == len(states)
-        assert set(s3_aois) == set(states)
+        with config:
+            s3_path = attrs["s3_output_path"]["Value"]
+            s3_info = config.con.sql(
+                f"select aois from read_parquet('{s3_path}')"
+            )
+            s3_aois = s3_info.pl().get_column("aois").to_list()
+            assert len(s3_aois) == len(states)
+            assert set(s3_aois) == set(states)
 
     except Exception as e:
         clear_sqs(sqs_out, region)
@@ -294,7 +301,9 @@ def test_many_small_tiles(
         def write_one(city, vsis_path):
             gdf = st.GeoDataFrame(city, geometry_format="wkb", strict=True)
             gdf = gdf.with_columns(st.geom().st.set_srid(4326))
-            gdf.st.write_file(path=vsis_path, driver="PARQUET", compression="zstd")
+            gdf.st.write_file(
+                path=vsis_path, driver="PARQUET", compression="zstd"
+            )
 
         with ThreadPoolExecutor() as executor:
             for idx in range(count):
@@ -321,7 +330,7 @@ def test_many_small_tiles(
         raise e
 
 
-# @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,
@@ -331,8 +340,8 @@ def test_stress(
     sqs_out: str,
     sqs_in: str,
     big_aoi_fill: None,
-    big_tiles_path: Path,
-    prefix: str
+    overture_tiles_path: Path,
+    prefix: str,
 ):
     """
     Stress test the environment by sending 1k files with 1k tiles in them and
@@ -343,7 +352,6 @@ def test_stress(
     clear_sqs(sqs_in, region)
 
     try:
-
         tile_count = 1074405
         batch_size = 1000
         count = floor(tile_count / batch_size)
@@ -353,8 +361,9 @@ def test_stress(
         cleanup_list = []
 
         n = 0
-        gdf = st.read_file(big_tiles_path)
+        gdf = st.read_file(overture_tiles_path)
         gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+
         def write_file(sl, vsis_path):
             sl.st.write_file(vsis_path, driver="PARQUET", compression="zstd")
 
@@ -378,7 +387,7 @@ def test_stress(
             bucket_name,
             start_time,
             max_wait_time_s,
-            lambda_name
+            lambda_name,
         )
     except Exception as e:
         clear_sqs(sqs_out, region)

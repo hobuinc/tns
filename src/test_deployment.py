@@ -9,6 +9,7 @@ import datetime as dt
 import pytest
 import boto3
 import polars_st as st
+import polars as pl
 
 from conftest import put_parquet, clear_sqs
 from intersects_lambda import CloudConfig
@@ -250,14 +251,11 @@ def test_lambda(
         assert len(source_file) == 1
         assert source_file[0] == filepath
 
-        with config:
-            s3_path = attrs["s3_output_path"]["Value"]
-            s3_info = config.con.sql(
-                f"select aois from read_parquet('{s3_path}')"
-            )
-            s3_aois = s3_info.pl().get_column("aois").to_list()
-            assert len(s3_aois) == len(states)
-            assert set(s3_aois) == set(states)
+        s3_path = attrs["s3_output_path"]["Value"]
+        s3_info = pl.read_parquet(s3_path, storage_options={"aws_region":config.region})
+        s3_aois = s3_info.get_column("aois").to_list()
+        assert len(s3_aois) == len(states)
+        assert set(s3_aois) == set(states)
 
     except Exception as e:
         clear_sqs(sqs_out, region)

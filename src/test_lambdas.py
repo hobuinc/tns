@@ -5,6 +5,7 @@ import json
 import shutil
 import time
 import pytest
+import polars as pl
 from duckdb import OutOfMemoryException
 
 from conftest import EventType
@@ -105,10 +106,10 @@ def test_handler(
     )
     s3_path = attrs["s3_output_path"]["StringValue"]
 
-    with config:
-        s3_info = config.con.sql(f"select aois from read_parquet('{s3_path}')")
-        s3_aois = s3_info.pl().get_column("aois").to_list()
-        assert len(s3_aois) == 50
+    s3_info = pl.read_parquet(s3_path)
+    s3_aois = s3_info.get_column("aois").to_list()
+
+    assert len(s3_aois) == 50
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)

@@ -142,7 +142,13 @@ def apply_compare(datapaths: list[str], config, outpath):
             SELECT aois.pk_and_model AS aois, list(tiles.pk_and_model) AS tiles
             FROM read_parquet('{config.aois_path}') AS aois
             JOIN read_parquet({datapaths}) AS tiles
-            ON ST_Intersects(aois.geometry, tiles.geometry)
+            ON (
+                aois.geometry_bbox.xmin <= tiles.geometry_bbox.xmax AND
+                aois.geometry_bbox.xmax >= tiles.geometry_bbox.xmin AND
+                aois.geometry_bbox.ymin <= tiles.geometry_bbox.ymax AND
+                aois.geometry_bbox.ymax >= tiles.geometry_bbox.ymin
+            )
+            AND ST_Intersects(aois.geometry, tiles.geometry)
             GROUP BY aois.pk_and_model
         )
         TO '{outpath}'

@@ -130,11 +130,17 @@ output sqs_out {
 output sns_out {
     value = module.tns_base.sns_out_arn
 }
+output dlq_out {
+    value = module.tns_base.dlq_out_arn
+}
 output sqs_in {
     value = module.tns_base.sqs_in_arn
 }
 output sns_in {
     value = module.tns_base.sns_in_arn
+}
+output dlq_in {
+    value = module.tns_base.dlq_in_arn
 }
 output container {
     value = module.tns_base.image_uri

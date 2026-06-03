@@ -1,7 +1,10 @@
-from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from math import floor
 from pathlib import Path
+import subprocess
+
+from concurrent.futures import ThreadPoolExecutor
 
 import time
 import datetime as dt
@@ -144,6 +147,8 @@ def stress_test_common(
     key_set: list[str],
     cleanup_list: list[str],
     sqs_out: str,
+    dlq_out: str,
+    dlq_in: str,
     region: str,
     bucket_name: str,
     start_time: dt.datetime,
@@ -191,8 +196,18 @@ def stress_test_common(
             lambda_name, region, start_time, end_time
         )
         if failed:
-            pass_fail = False
+            print(f"Errors from SQS messages: {failed}")
             msgs.append(f"Errors from SQS messages: {failed}")
+
+        # check dlqs
+        dlq_out_check = clear_sqs(dlq_out, region)
+        dlq_in_check = clear_sqs(dlq_in, region)
+        if dlq_out_check:
+            pass_fail = False
+            msgs.append(f"Messages found in dlq: {dlq_out_check}")
+        if dlq_in_check:
+            pass_fail = False
+            msgs.append(f"Messages found in dlq: {dlq_in_check}")
 
         print(metrics)
         if not pass_fail:
@@ -208,6 +223,8 @@ def test_lambda(
     region: str,
     sqs_out: str,
     sqs_in: str,
+    dlq_in: str,
+    dlq_out: str,
     bucket_name: str,
     small_tiles_path: Path,
     small_aois_path: Path,
@@ -252,10 +269,17 @@ def test_lambda(
         assert source_file[0] == filepath
 
         s3_path = attrs["s3_output_path"]["Value"]
-        s3_info = pl.read_parquet(s3_path, storage_options={"aws_region":config.region})
+        s3_info = pl.read_parquet(
+            s3_path, storage_options={"aws_region": config.region}
+        )
         s3_aois = s3_info.get_column("aois").to_list()
         assert len(s3_aois) == len(states)
         assert set(s3_aois) == set(states)
+
+        dlq_out_check = clear_sqs(dlq_out, region)
+        dlq_in_check = clear_sqs(dlq_in, region)
+        assert not dlq_out_check
+        assert not dlq_in_check
 
     except Exception as e:
         clear_sqs(sqs_out, region)
@@ -263,7 +287,7 @@ def test_lambda(
         raise e
 
 
-@pytest.mark.skip(reason="Manually run only.")
+# @pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_many_small_tiles(
     env_type,
@@ -272,6 +296,8 @@ def test_many_small_tiles(
     region: str,
     sqs_out: str,
     sqs_in: str,
+    dlq_out: str,
+    dlq_in: str,
     aoi_fill: None,
     cities_path: Path,
 ):
@@ -317,6 +343,8 @@ def test_many_small_tiles(
             key_set,
             cleanup_list,
             sqs_out,
+            dlq_out,
+            dlq_in,
             region,
             bucket_name,
             start_time,
@@ -328,7 +356,7 @@ def test_many_small_tiles(
         raise e
 
 
-@pytest.mark.skip(reason="Manually run only.")
+# @pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,
@@ -337,6 +365,8 @@ def test_stress(
     region: str,
     sqs_out: str,
     sqs_in: str,
+    dlq_in: str,
+    dlq_out: str,
     big_aoi_fill: None,
     overture_tiles_path: Path,
     prefix: str,
@@ -358,34 +388,35 @@ def test_stress(
         key_set = set()
         cleanup_list = []
 
-        n = 0
-        gdf = st.read_file(overture_tiles_path)
-        gdf = gdf.with_columns(st.geom().st.set_srid(4326))
+        files = os.listdir(overture_tiles_path)
+        cleanup_list = [f"{config.prefix}/compare/{f}" for f in files]
+        key_set = set(
+            f"s3://{bucket_name}/{config.prefix}/compare/{f}" for f in files
+        )
+        cleanup_s3_objects(bucket_name, cleanup_list, region)
+        sync_cmd = [
+            "aws",
+            "s3",
+            "sync",
+            "--quiet",
+            f"{overture_tiles_path}",
+            f"s3://{bucket_name}/{config.prefix}/compare/",
+        ]
+        subprocess.run(sync_cmd)
 
-        def write_file(sl, vsis_path):
-            sl.st.write_file(vsis_path, driver="PARQUET", compression="zstd")
-
-        with ThreadPoolExecutor() as executor:
-            for sl in gdf.iter_slices(1000):
-                key = f"{config.prefix}/compare/stress_{n}.parquet"
-                vsis_path = f"/vsis3/{config.bucket}/{key}"
-                cleanup_list.append(key)
-                s3path = f"s3://{bucket_name}/{key}"
-                key_set.add(s3path)
-                n = n + 1
-                executor.submit(write_file, sl=sl, vsis_path=vsis_path)
-
-        max_wait_time_s = max(600, 30 * (tile_count / 10**5))  # 5min per 1M
+        max_wait_time_s = 60*60  # 5min per 1M
         lambda_name = f"{prefix}_tns_comp_lambda"
         stress_test_common(
-            key_set,
-            cleanup_list,
-            sqs_out,
-            region,
-            bucket_name,
-            start_time,
-            max_wait_time_s,
-            lambda_name,
+            key_set=key_set,
+            cleanup_list=cleanup_list,
+            sqs_out=sqs_out,
+            dlq_out=dlq_out,
+            dlq_in=dlq_in,
+            region=region,
+            bucket_name=bucket_name,
+            start_time=start_time,
+            max_wait_time=max_wait_time_s,
+            lambda_name=lambda_name,
         )
     except Exception as e:
         clear_sqs(sqs_out, region)

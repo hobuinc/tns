@@ -12,6 +12,7 @@ import os
 import boto3
 import duckdb
 import traceback
+from tempfile import TemporaryDirectory as TempDir
 
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ class CloudConfig:
         self.prefix = prefix
         sub_key = f"{self.prefix}/subs/subscriptions.parquet"
         self.aois_path = f"s3://{self.bucket}/{sub_key}"
+        self.tempdir = None
 
         # mem limit passed in as value of MB (2**20), GB is (2**30), div by
         # 2**10 for value of GB here
@@ -43,13 +45,17 @@ class CloudConfig:
     def __enter__(self):
         if self.con is not None:
             try:
-                self.con.execute('select 1')
+                self.con.execute("select 1")
                 return self
             except duckdb.ConnectionException:
                 pass
 
         con = duckdb.connect()
-        # lambdas can only create files in /tmp
+
+        # lambdas will automatically write to '/tmp'
+        self.tempdir = TempDir()
+        con.execute(f"SET temp_directory='{self.tempdir.name}'")
+
         con.execute("LOAD httpfs")
         con.execute("LOAD spatial")
         con.execute("LOAD aws")
@@ -67,6 +73,9 @@ class CloudConfig:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.con.close()
+        self.tempdir.cleanup()
+
+        self.tempdir = None
         self.con = None
 
 
@@ -202,11 +211,15 @@ def handler(event: dict[str, str], context):
             for sqs_event in events:
                 data_paths = data_paths + get_data_paths(sqs_event)
             if not data_paths:
-                raise ValueError("At least one tile GeoParquet path is required.")
+                raise ValueError(
+                    "At least one tile GeoParquet path is required."
+                )
 
             # process data paths together
             name = uuid4()
-            base_s3_path = f"{config.bucket}/{config.prefix}/intersects/{name}.parquet"
+            base_s3_path = (
+                f"{config.bucket}/{config.prefix}/intersects/{name}.parquet"
+            )
             full_s3_path = f"s3://{base_s3_path}"
             sns_message = apply_compare(data_paths, config, full_s3_path)
             config.sns.publish(TopicArn=config.sns_out_arn, **sns_message)
@@ -216,7 +229,7 @@ def handler(event: dict[str, str], context):
                 delete_sqs_message(sqs_event, config)
 
             # return as list to conform with possibility of needing to split
-            return [ sns_message ]
+            return [sns_message]
     except duckdb.OutOfMemoryException as e:
         events = event["Records"]
         # if it can't be split further, raise memory error
@@ -226,7 +239,7 @@ def handler(event: dict[str, str], context):
         # split into single event runs to see if that alleviates issues
         try:
             split_events = [{"Records": [e]} for e in events]
-            sns_messages = [ handler(re, None)[0] for re in split_events]
+            sns_messages = [handler(re, None)[0] for re in split_events]
             return sns_messages
         except Exception as e:
             exc_str = traceback.format_exc()

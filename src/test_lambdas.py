@@ -268,13 +268,9 @@ def test_945(
         source_files = json.loads(attrs["source_files"]["StringValue"])
         assert len(source_files) == 1
         s3_path = attrs["s3_output_path"]["StringValue"]
-
-        with config:
-            s3_info = config.con.sql(
-                f"select aois from read_parquet('{s3_path}')"
-            )
-            s3_aois = s3_info.pl().get_column("aois").to_list()
-            assert len(s3_aois)
+        s3_info = pl.read_parquet(s3_path)
+        s3_aois = s3_info.get_column("aois").to_list()
+        assert len(s3_aois)
 
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)

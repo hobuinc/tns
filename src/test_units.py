@@ -1,8 +1,8 @@
 import json
-from uuid import uuid4
 from pathlib import Path
 import polars_st as st
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+import os.path
 
 from intersects_lambda import (
     CloudConfig,
@@ -111,8 +111,14 @@ def test_config():
     assert config.bucket == bucket
     assert config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"
     assert config.mem_limit == '5.0GB'
+    assert config.tempdir is None
+
     with config:
+        assert config.tempdir is not None
+        with TemporaryDirectory() as td:
+            td_name = config.tempdir.name
+            assert os.path.dirname(td) == os.path.dirname(td_name)
         a = config.con.sql('select 1')
         assert a.pl().get_column("1").to_list()[0] == 1
 
-    assert config.con is None
+    assert config.tempdir is None

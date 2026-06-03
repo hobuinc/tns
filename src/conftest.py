@@ -25,7 +25,7 @@ def pytest_configure(config):
     )
 
 
-def clear_sqs(sqs_arn: str, region: str) -> None:
+def clear_sqs(sqs_arn: str, region: str) -> list:
     """Clear old SQS Messages from queue so tests aren't confused."""
     sqs = boto3.client("sqs", region_name=region)
     queue_name = sqs_arn.split(":")[-1]
@@ -47,7 +47,7 @@ def clear_sqs(sqs_arn: str, region: str) -> None:
                 )
         else:
             break
-    return
+    return messages
 
 
 def get_message(
@@ -193,6 +193,18 @@ def sqs_out(tf_output: dict[str, str]) -> Fixture[str]:
 
 
 @pytest.fixture(scope="function")
+def dlq_in(tf_output: dict[str, str]) -> Fixture[str]:
+    """DLQ SQS In ARN from Terraform output."""
+    yield tf_output["dlq_in"]
+
+
+@pytest.fixture(scope="function")
+def dlq_out(tf_output: dict[str, str]) -> Fixture[str]:
+    """DLQ SQS Out ARN from Terraform output."""
+    yield tf_output["dlq_out"]
+
+
+@pytest.fixture(scope="function")
 def sns_out(tf_output: dict[str, str]) -> Fixture[str]:
     """SNS Out ARN from Terraform output."""
     yield tf_output["sns_out"]
@@ -229,8 +241,8 @@ def big_tiles_path(test_dir: Path) -> Fixture[Path]:
 
 @pytest.fixture(scope="function")
 def overture_tiles_path(test_dir: Path) -> Fixture[Path]:
-    """Parquet of 50 USA States duplicated to 1000 tiles."""
-    yield test_dir / "data" / "overture_set.parquet"
+    """Parquet of stress test data from Overture, 1047 files."""
+    yield test_dir / "data" / "large_set_dir"
 
 @pytest.fixture(scope="function")
 def cities_path(test_dir: Path) -> Fixture[Path]:

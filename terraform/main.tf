@@ -34,6 +34,7 @@ module tns_lambdas {
     prefix = var.deploy_prefix
     sts_lambda_role_name = var.sts_lambda_role_name
     memory_size = var.lambda_memory_size
+    s3_cert_path = var.s3_cert_path
 
     image_uri = module.tns_base.image_uri
     bucket_name = module.tns_base.s3_bucket_name
@@ -98,6 +99,12 @@ variable modify_bucket {
 
 variable ecr_image_uri {
     description="ECR Image URI, can be obtained from docker_init script."
+    type = string
+    default = ""
+}
+
+variable s3_cert_path {
+    description="SSL S3 Cert path for higher network security."
     type = string
     default = ""
 }

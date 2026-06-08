@@ -1,8 +1,9 @@
 import os
+from pathlib import Path
 import boto3
 import json
 
-import shutil
+from tempfile import TemporaryDirectory
 import time
 import pytest
 import polars as pl
@@ -35,6 +36,32 @@ def clear_sqs(sqs_arn: str, region: str):
             break
     return messages
 
+
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_local_config(env_type: str, region: str, sns_out: str, bucket_name: str, prefix: str, mem_size, s3_cert_path: Path):
+    """Test Cloud/DuckDB coordination client work correctly."""
+    # set environment variables, which config will pull from
+    # then test that cloud config correctly pulls from those
+
+    config = CloudConfig(region, sns_out, bucket_name, prefix, mem_size, s3_cert_path)
+    assert config.region == region
+    assert config.sns_out_arn == sns_out
+    assert config.bucket == bucket_name
+    assert (
+        config.aois_path == f"s3://{bucket_name}/{prefix}/subs/subscriptions.parquet"
+    )
+    assert config.tempdir
+    assert os.path.exists(config.tempdir.name)
+    assert config.cert_path
+    assert os.path.exists(config.cert_dest)
+    assert config.using_certs
+
+    td_name = config.tempdir.name
+    with config:
+        with TemporaryDirectory() as td:
+            assert os.path.dirname(td) == os.path.dirname(td_name)
+        a = config.con.sql("select 1")
+        assert a.pl().get_column("1").to_list()[0] == 1
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_big(

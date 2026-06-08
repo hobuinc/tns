@@ -20,27 +20,30 @@ def test_compare(small_tiles_path: Path, small_aois_path: Path):
     sns_out_arn = "fake-sns-arn"
     bucket = "tns-fake-bucket"
     prefix = "fake"
-    mem_limit = 5*(2**10)
+    mem_limit = 5 * (2**10)
     config = CloudConfig(region, sns_out_arn, bucket, prefix, mem_limit)
     config.aois_path = small_aois_path.as_posix()
 
     with config:
         with NamedTemporaryFile() as tempfile:
-
             # make comparison and confirm
             datapaths = [small_tiles_path.as_posix()]
             res = apply_compare(datapaths, config, tempfile.name)
-            attrs = res['MessageAttributes']
+            attrs = res["MessageAttributes"]
 
-            source_files = json.loads(attrs['source_files']['StringValue'])
+            source_files = json.loads(attrs["source_files"]["StringValue"])
             assert source_files == datapaths
 
-            assert attrs['s3_output_path']['StringValue']
-            assert tempfile.name == attrs['s3_output_path']['StringValue']
+            assert attrs["s3_output_path"]["StringValue"]
+            assert tempfile.name == attrs["s3_output_path"]["StringValue"]
 
             int_pl = st.read_file(tempfile.name).get_column("aois").to_list()
 
-            local_gdf = (st.read_file(small_aois_path).get_column("pk_and_model").to_list())
+            local_gdf = (
+                st.read_file(small_aois_path)
+                .get_column("pk_and_model")
+                .to_list()
+            )
 
             assert set(int_pl) == set(local_gdf)
 
@@ -49,7 +52,6 @@ def test_fail_res():
     """Test that failure responses are returned in expected structures."""
     paths = ["s3://fake_bucket/tns-sample-path/key.parquet"]
     err_str = "TypeError('You passed in the wrong type, fix that.')"
-
 
     msg = get_fail_res(dpaths=paths, err_str=err_str)
     assert "MessageAttributes" in msg
@@ -76,23 +78,22 @@ def test_pass_res():
     assert "Message" in res
     assert res["Message"] == "succeeded"
 
-    assert 'MessageAttributes' in res
-    attrs = res['MessageAttributes']
+    assert "MessageAttributes" in res
+    attrs = res["MessageAttributes"]
     assert all(x in attrs for x in ["source_files", "s3_output_path", "status"])
 
     assert "StringValue" in attrs["source_files"]
     assert "DataType" in attrs["source_files"]
-    source_files = json.loads(attrs['source_files']['StringValue'])
+    source_files = json.loads(attrs["source_files"]["StringValue"])
     assert source_files == paths
-
 
     assert "StringValue" in attrs["s3_output_path"]
     assert "DataType" in attrs["s3_output_path"]
-    assert paths[0] == attrs['s3_output_path']['StringValue']
+    assert paths[0] == attrs["s3_output_path"]["StringValue"]
 
     assert "StringValue" in attrs["status"]
     assert "DataType" in attrs["status"]
-    assert attrs['status']['StringValue'] == "succeeded"
+    assert attrs["status"]["StringValue"] == "succeeded"
 
 
 def test_config():
@@ -104,21 +105,24 @@ def test_config():
     bucket = "fake-bucket"
     prefix = "fake"
 
-    mem_limit = 5*(2**10)
+    mem_limit = 5 * (2**10)
     config = CloudConfig(region, sns_arn, bucket, prefix, mem_limit)
     assert config.region == region
     assert config.sns_out_arn == sns_arn
     assert config.bucket == bucket
-    assert config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"
-    assert config.mem_limit == '5.0GB'
-    assert config.tempdir is None
+    assert (
+        config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"
+    )
+    assert config.mem_limit == "5.0GB"
+    assert config.tempdir
+    assert not config.using_certs
 
+    # force config.cert_dest to be where the default ca path is and make sure
+    # that it's being used in the creation of the
+
+    td_name = config.tempdir.name
     with config:
-        assert config.tempdir is not None
         with TemporaryDirectory() as td:
-            td_name = config.tempdir.name
             assert os.path.dirname(td) == os.path.dirname(td_name)
-        a = config.con.sql('select 1')
+        a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
-
-    assert config.tempdir is None

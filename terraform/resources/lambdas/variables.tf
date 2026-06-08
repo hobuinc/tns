@@ -16,6 +16,9 @@ variable memory_size {
     default = 5120
     type = number
 }
+variable s3_cert_path {
+    type = string
+}
 
 
 # common.tf

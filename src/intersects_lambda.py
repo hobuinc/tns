@@ -22,25 +22,57 @@ MAX_MSG_BYTES = 2**10 * 256  # 256KB
 class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
 
-    def __init__(self, region, sns_out_arn, bucket, prefix, mem_limit):
+    def __init__(
+        self, region, sns_out_arn, bucket, prefix, mem_limit, cert_path=None
+    ):
         self.region = region
         self.sns_out_arn = sns_out_arn
         self.bucket = bucket
         self.prefix = prefix
         sub_key = f"{self.prefix}/subs/subscriptions.parquet"
+
         self.aois_path = f"s3://{self.bucket}/{sub_key}"
-        self.tempdir = None
+        self.cert_path = cert_path
+
+        self.cert_dest = None
+        self.tempdir = TempDir(delete=True)
+
+        self.s3 = boto3.client("s3", region_name=self.region, verify=False)
+
+        # if CA file exists, grab it from S3 and write it to the temp directory
+        if self.cert_path is not None:
+            self.cert_dest = f"{self.tempdir.name}/cert.pem"
+            # bypass ssl cert checking until we get it copied in
+            response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
+            cert_content = response["Body"].read()
+            with open(self.cert_dest, "wb") as f:
+                f.write(cert_content)
+            print(
+                f"Cert copied from s3://{self.bucket}/{self.cert_path} to "
+                f"{self.cert_dest}"
+            )
 
         # mem limit passed in as value of MB (2**20), GB is (2**30), div by
         # 2**10 for value of GB here
         shorter = mem_limit / (2**10)
         self.mem_limit = f"{shorter}GB"
 
-        self.sns = boto3.client("sns", region_name=self.region)
-        self.s3 = boto3.client("s3", region_name=self.region)
-        self.sqs = boto3.client("sqs", region_name=self.region)
-        self.con = None
+        # preliminary usage, will need to be remade after writing the cert
+        # if the cert is present, remake the aws clients with it
+        if self.cert_dest is not None:
+            self.sns = boto3.client(
+                "sns", region_name=self.region, verify=self.cert_dest
+            )
+            self.sqs = boto3.client(
+                "sqs", region_name=self.region, verify=self.cert_dest
+            )
+            self.using_certs = True
+        else:
+            self.sns = boto3.client("sns", region_name=self.region)
+            self.sqs = boto3.client("sqs", region_name=self.region)
+            self.using_certs = False
 
+        self.con = None
 
     def __enter__(self):
         if self.con is not None:
@@ -53,7 +85,6 @@ class CloudConfig:
         con = duckdb.connect()
 
         # lambdas will automatically write to '/tmp'
-        self.tempdir = TempDir()
         con.execute(f"SET temp_directory='{self.tempdir.name}'")
 
         con.execute("LOAD httpfs")
@@ -73,9 +104,6 @@ class CloudConfig:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.con.close()
-        self.tempdir.cleanup()
-
-        self.tempdir = None
         self.con = None
 
 
@@ -170,11 +198,12 @@ def apply_compare(datapaths: list[str], config, outpath):
 def get_env_vars(var_name: str):
     """Handle fetching requirend environment variables and crafting error
     messages if they're missing."""
-    env_keys = os.environ.keys()
+    val = os.environ.get(var_name)
 
-    if var_name in env_keys:
-        val = os.environ[var_name]
+    if val is not None:
         return val
+    elif var_name == "CERT_PATH":
+        return None
     else:
         raise ValueError(
             f"Required variable {var_name} missing from environment."
@@ -192,9 +221,16 @@ def handler(event: dict[str, str], context):
         bucket = get_env_vars("S3_BUCKET")
         prefix = get_env_vars("DEPLOY_PREFIX")
         mem_limit = get_env_vars("MEMORY_LIMIT")
+
+        # on sc/tc, we need a custom certicate to make aws service calls
+        cert_path = get_env_vars("CERT_PATH")
         mem_limit = int(mem_limit)
-        config = CloudConfig(region, sns_out, bucket, prefix, mem_limit)
+        config = CloudConfig(
+            region, sns_out, bucket, prefix, mem_limit, cert_path
+        )
     except Exception as e:
+        # this section won't work in sc/tc because sns won't have
+        # the cert allowing them to connect yet
         sns = boto3.client("sns", region_name=region)
         fail_tb = traceback.format_exc()
         fail_msg = get_fail_res([], fail_tb)

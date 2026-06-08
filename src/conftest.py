@@ -4,7 +4,6 @@ from typing import Generator, TypeVar
 import pytest
 import json
 import boto3
-import duckdb
 import polars_st as st
 
 from pathlib import Path
@@ -239,15 +238,34 @@ def big_tiles_path(test_dir: Path) -> Fixture[Path]:
     """Parquet of 50 USA States duplicated to 1000 tiles."""
     yield test_dir / "data" / "big_state_tiles.parquet"
 
+
 @pytest.fixture(scope="function")
 def overture_tiles_path(test_dir: Path) -> Fixture[Path]:
     """Parquet of stress test data from Overture, 1047 files."""
     yield test_dir / "data" / "large_set_dir"
 
+
 @pytest.fixture(scope="function")
 def cities_path(test_dir: Path) -> Fixture[Path]:
     """Parquet of US Cities boundaries from Overture."""
     yield test_dir / "data" / "us_cities.parquet"
+
+
+@pytest.fixture(scope="function")
+def default_cert() -> Fixture[Path]:
+    """Get system default SSL cert path."""
+    import requests
+    yield requests.utils.DEFAULT_CA_BUNDLE_PATH
+
+@pytest.fixture(scope="function")
+def s3_cert_path(default_cert, config, prefix) -> Fixture[Path]:
+    """Get system default SSL cert path."""
+    cert_path = f'{prefix}/cert.pem'
+    with open(default_cert, 'rb') as cafile:
+        data = cafile.read()
+        config.s3.put_object(Bucket=config.bucket, Key=cert_path, Body=data)
+
+    yield cert_path
 
 
 @pytest.fixture(scope="function")

@@ -20,6 +20,7 @@ resource aws_lambda_function compare_function {
             S3_BUCKET: var.bucket_name
             DEPLOY_PREFIX: var.prefix
             MEMORY_LIMIT: var.memory_size
+            S3_CERT_PATH: var.s3_cert_path
         }
     }
 

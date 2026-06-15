@@ -202,7 +202,7 @@ def get_env_vars(var_name: str):
 
     if val is not None:
         return val
-    elif var_name == "CERT_PATH":
+    elif var_name == "S3_CERT_PATH":
         return None
     else:
         raise ValueError(
@@ -223,7 +223,7 @@ def handler(event: dict[str, str], context):
         mem_limit = get_env_vars("MEMORY_LIMIT")
 
         # on sc/tc, we need a custom certicate to make aws service calls
-        cert_path = get_env_vars("CERT_PATH")
+        cert_path = get_env_vars("S3_CERT_PATH")
         mem_limit = int(mem_limit)
         config = CloudConfig(
             region, sns_out, bucket, prefix, mem_limit, cert_path

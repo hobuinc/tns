@@ -258,10 +258,30 @@ def default_cert() -> Fixture[Path]:
     yield requests.utils.DEFAULT_CA_BUNDLE_PATH
 
 @pytest.fixture(scope="function")
-def s3_cert_path(default_cert, config, prefix) -> Fixture[Path]:
+def s3_cert_path(default_cert: Path, config: CloudConfig, prefix: str) -> Fixture[Path]:
     """Get system default SSL cert path."""
     cert_path = f'{prefix}/cert.pem'
     with open(default_cert, 'rb') as cafile:
+        data = cafile.read()
+        config.s3.put_object(Bucket=config.bucket, Key=cert_path, Body=data)
+
+    yield cert_path
+
+@pytest.fixture(scope="function")
+def nonexistent_s3_cert_path(bucket_name) -> Fixture[Path]:
+    """Get system default SSL cert path."""
+    yield f"s3://{bucket_name}/asdfasdfasdf/asdf.pem"
+
+@pytest.fixture(scope="function")
+def bad_cert(test_dir) -> Fixture[Path]:
+    """Get a fake SSL cert path."""
+    yield test_dir / 'fake_cert.pem'
+
+@pytest.fixture(scope="function")
+def bad_s3_cert_path(bad_cert: Path, config: CloudConfig, prefix: str) -> Fixture[Path]:
+    """Get fake SSL cert path."""
+    cert_path = f'{prefix}/bad_cert.pem'
+    with open(bad_cert, 'rb') as cafile:
         data = cafile.read()
         config.s3.put_object(Bucket=config.bucket, Key=cert_path, Body=data)
 

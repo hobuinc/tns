@@ -8,6 +8,7 @@ import time
 import pytest
 import polars as pl
 from duckdb import OutOfMemoryException
+from botocore.exceptions import ClientError, SSLError
 
 from conftest import EventType
 from intersects_lambda import CloudConfig, handler
@@ -36,19 +37,68 @@ def clear_sqs(sqs_arn: str, region: str):
             break
     return messages
 
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_local_config_bad_path(
+    env_type: str,
+    region: str,
+    sns_out: str,
+    bucket_name: str,
+    prefix: str,
+    mem_size: str,
+    nonexistent_s3_cert_path: Path,
+):
+    """Test Cloud/DuckDB coordination client work correctly."""
+    # set environment variables, which config will pull from
+    # then test that cloud config correctly pulls from those
+    cert_path = nonexistent_s3_cert_path
+
+    with pytest.raises(ClientError):
+        CloudConfig(
+            region, sns_out, bucket_name, prefix, mem_size, cert_path
+        )
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
-def test_local_config(env_type: str, region: str, sns_out: str, bucket_name: str, prefix: str, mem_size, s3_cert_path: Path):
+def test_local_config_bad_cert(
+    env_type: str,
+    region: str,
+    sns_out: str,
+    bucket_name: str,
+    prefix: str,
+    mem_size: str,
+    bad_s3_cert_path: Path,
+):
+    """Test Cloud/DuckDB coordination client work correctly."""
+    cert_path = bad_s3_cert_path
+
+    config = CloudConfig(
+        region, sns_out, bucket_name, prefix, mem_size, cert_path
+    )
+    with pytest.raises(SSLError):
+        config.sns.publish(TopicArn=sns_out, Message='asdf')
+
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_local_config(
+    env_type: str,
+    region: str,
+    sns_out: str,
+    bucket_name: str,
+    prefix: str,
+    mem_size: str,
+    s3_cert_path: Path,
+):
     """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
 
-    config = CloudConfig(region, sns_out, bucket_name, prefix, mem_size, s3_cert_path)
+    config = CloudConfig(
+        region, sns_out, bucket_name, prefix, mem_size, s3_cert_path
+    )
     assert config.region == region
     assert config.sns_out_arn == sns_out
     assert config.bucket == bucket_name
     assert (
-        config.aois_path == f"s3://{bucket_name}/{prefix}/subs/subscriptions.parquet"
+        config.aois_path
+        == f"s3://{bucket_name}/{prefix}/subs/subscriptions.parquet"
     )
     assert config.tempdir
     assert os.path.exists(config.tempdir.name)
@@ -63,6 +113,10 @@ def test_local_config(env_type: str, region: str, sns_out: str, bucket_name: str
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
 
+    ## try doing this again but with a fake cert
+    # config =
+
+
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_big(
     env_type: str,
@@ -71,7 +125,7 @@ def test_big(
     sqs_out: str,
     big_event: EventType,
     big_aoi_fill: None,
-    env_vars: None
+    env_vars: None,
 ):
     """Test lambda function's ability to coordinate large amounts of data."""
 
@@ -89,7 +143,7 @@ def test_big(
         status = attrs["status"]["StringValue"]
         assert status == "succeeded", json.dumps(attrs["error"])
 
-        sources = json.loads(attrs['source_files']['StringValue'])
+        sources = json.loads(attrs["source_files"]["StringValue"])
         assert len(sources) == 10
 
     clear_sqs(sqs_in, region)
@@ -277,7 +331,7 @@ def test_945(
     region: str,
     event_945: EventType,
     config: CloudConfig,
-    env_vars
+    env_vars,
 ):
     """Testing a scenario that can easily have memory problems."""
     clear_sqs(sqs_in, region)

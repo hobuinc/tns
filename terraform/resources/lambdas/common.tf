@@ -79,7 +79,7 @@ resource aws_iam_role_policy lambda_policy {
                     "arn:aws:s3:::${var.bucket_name}/${var.prefix}/compare/*.parquet",
                     "arn:aws:s3:::${var.bucket_name}/${var.prefix}/compare/*.parquet",
                     "arn:aws:s3:::${var.bucket_name}/${var.prefix}/subs/*.parquet",
-                    "arn:aws:s3:::${var.bucket_name}/${var.prefix}/${var.s3_cert_path}"
+                    "arn:aws:s3:::${var.bucket_name}/${var.s3_cert_path}"
                 ]
             },
             {

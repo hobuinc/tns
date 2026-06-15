@@ -247,9 +247,9 @@ def handler(event: dict[str, str], context):
             for sqs_event in events:
                 data_paths = data_paths + get_data_paths(sqs_event)
             if not data_paths:
-                raise ValueError(
-                    "At least one tile GeoParquet path is required."
-                )
+                print("No GeoParquet files found in events."
+                      "If the lambda was started by an 's3:TestEvent' then "
+                      "this is expected.")
 
             # process data paths together
             name = uuid4()

@@ -239,6 +239,7 @@ def test_lambda(
     # clear potential previous run data
     clear_sqs(sqs_out, region)
     clear_sqs(sqs_in, region)
+
     try:
         key = f"{config.prefix}/compare/geom.parquet"
 
@@ -287,7 +288,7 @@ def test_lambda(
         raise e
 
 
-# @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_many_small_tiles(
     env_type,
@@ -356,7 +357,7 @@ def test_many_small_tiles(
         raise e
 
 
-# @pytest.mark.skip(reason="Manually run only.")
+@pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_stress(
     env_type,

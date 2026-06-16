@@ -295,6 +295,7 @@ def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["AWS_REGION"] = tf_output["aws_region"]
     os.environ["SNS_OUT_ARN"] = tf_output["sns_out"]
     os.environ["S3_BUCKET"] = tf_output["s3_bucket_name"]
+    os.environ["S3_CERT_PATH"] = tf_output["s3_cert_path"]
     os.environ["MEMORY_LIMIT"] = str(tf_output["lambda_memory_size"])
 
 

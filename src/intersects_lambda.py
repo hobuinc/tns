@@ -200,7 +200,7 @@ def get_env_vars(var_name: str):
     messages if they're missing."""
     val = os.environ.get(var_name)
 
-    if val is not None:
+    if val is not None and val != "":
         return val
     elif var_name == "S3_CERT_PATH":
         return None

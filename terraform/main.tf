@@ -128,6 +128,9 @@ output s3_bucket_name {
 output lambda_memory_size {
     value = var.lambda_memory_size
 }
+output s3_cert_path {
+    value = var.s3_cert_path
+}
 
 
 #comp

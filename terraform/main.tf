@@ -35,6 +35,7 @@ module tns_lambdas {
     sts_lambda_role_name = var.sts_lambda_role_name
     memory_size = var.lambda_memory_size
     s3_cert_path = var.s3_cert_path
+    s3_endpoint = var.s3_endpoint
 
     image_uri = module.tns_base.image_uri
     bucket_name = module.tns_base.s3_bucket_name
@@ -109,6 +110,12 @@ variable s3_cert_path {
     default = ""
 }
 
+variable s3_endpoint {
+    description = "Maps to AWS_S3_ENDPOINT in the lambda for duckdb usage."
+    type = string
+    default = ""
+}
+
 #####################################
 ##            Outputs              ##
 #####################################
@@ -130,6 +137,9 @@ output lambda_memory_size {
 }
 output s3_cert_path {
     value = var.s3_cert_path
+}
+output s3_endpoint {
+    value = var.s3_endpoint
 }
 
 

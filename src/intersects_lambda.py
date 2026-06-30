@@ -23,7 +23,8 @@ class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
 
     def __init__(
-        self, region, sns_out_arn, bucket, prefix, mem_limit, cert_path=None
+        self, region, sns_out_arn, bucket, prefix, mem_limit, cert_path=None,
+        s3_endpoint=None
     ):
         self.region = region
         self.sns_out_arn = sns_out_arn
@@ -33,6 +34,7 @@ class CloudConfig:
 
         self.aois_path = f"s3://{self.bucket}/{sub_key}"
         self.cert_path = cert_path
+        self.s3_endpoint = s3_endpoint
 
         self.cert_dest = None
         self.tempdir = TempDir(delete=True)
@@ -91,12 +93,21 @@ class CloudConfig:
         con.execute("LOAD spatial")
         con.execute("LOAD aws")
         con.execute(f"SET memory_limit='{self.mem_limit}'")
-        ex_str = f"""
-            CREATE SECRET (
-                TYPE S3,
-                REGION '{self.region}',
-                PROVIDER CREDENTIAL_CHAIN)
-        """
+        if self.s3_endpoint is not None:
+            ex_str = f"""
+                CREATE SECRET (
+                    TYPE S3,
+                    REGION '{self.region}',
+                    ENDPOINT '{self.s3_endpoint}',
+                    PROVIDER CREDENTIAL_CHAIN)
+            """
+        else:
+            ex_str = f"""
+                CREATE SECRET (
+                    TYPE S3,
+                    REGION '{self.region}',
+                    PROVIDER CREDENTIAL_CHAIN)
+            """
         con.execute(ex_str)
 
         self.con = con
@@ -201,6 +212,8 @@ def get_env_vars(var_name: str):
     val = os.environ.get(var_name)
 
     if val is not None and val != "":
+        print(f"Fetching environment variable: {var_name}.")
+        print(f"Value: {val}.")
         return val
     elif var_name == "S3_CERT_PATH":
         return None
@@ -221,12 +234,13 @@ def handler(event: dict[str, str], context):
         bucket = get_env_vars("S3_BUCKET")
         prefix = get_env_vars("DEPLOY_PREFIX")
         mem_limit = get_env_vars("MEMORY_LIMIT")
+        s3_endpoint = get_env_vars("AWS_S3_ENDPOINT")
 
         # on sc/tc, we need a custom certicate to make aws service calls
         cert_path = get_env_vars("S3_CERT_PATH")
         mem_limit = int(mem_limit)
         config = CloudConfig(
-            region, sns_out, bucket, prefix, mem_limit, cert_path
+            region, sns_out, bucket, prefix, mem_limit, cert_path, s3_endpoint
         )
     except Exception as e:
         # this section won't work in sc/tc because sns won't have

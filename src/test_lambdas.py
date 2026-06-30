@@ -37,6 +37,7 @@ def clear_sqs(sqs_arn: str, region: str):
             break
     return messages
 
+
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_local_config_bad_path(
     env_type: str,
@@ -53,9 +54,8 @@ def test_local_config_bad_path(
     cert_path = nonexistent_s3_cert_path
 
     with pytest.raises(ClientError):
-        CloudConfig(
-            region, sns_out, bucket_name, prefix, mem_size, cert_path
-        )
+        CloudConfig(region, sns_out, bucket_name, prefix, mem_size, cert_path)
+
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_local_config_bad_cert(
@@ -74,7 +74,8 @@ def test_local_config_bad_cert(
         region, sns_out, bucket_name, prefix, mem_size, cert_path
     )
     with pytest.raises(SSLError):
-        config.sns.publish(TopicArn=sns_out, Message='asdf')
+        config.sns.publish(TopicArn=sns_out, Message="asdf")
+
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_local_config(
@@ -90,8 +91,15 @@ def test_local_config(
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
 
+    s3_endpoint = "s3.amazonaws.com"
     config = CloudConfig(
-        region, sns_out, bucket_name, prefix, mem_size, s3_cert_path
+        region,
+        sns_out,
+        bucket_name,
+        prefix,
+        mem_size,
+        s3_cert_path,
+        s3_endpoint,
     )
     assert config.region == region
     assert config.sns_out_arn == sns_out
@@ -105,6 +113,7 @@ def test_local_config(
     assert config.cert_path
     assert os.path.exists(config.cert_dest)
     assert config.using_certs
+    assert config.s3_endpoint == s3_endpoint
 
     td_name = config.tempdir.name
     with config:
@@ -112,9 +121,6 @@ def test_local_config(
             assert os.path.dirname(td) == os.path.dirname(td_name)
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
-
-    ## try doing this again but with a fake cert
-    # config =
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)

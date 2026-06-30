@@ -21,6 +21,7 @@ resource aws_lambda_function compare_function {
             DEPLOY_PREFIX: var.prefix
             MEMORY_LIMIT: var.memory_size
             S3_CERT_PATH: var.s3_cert_path
+            AWS_S3_ENDPOINT: var.s3_endpoint
         }
     }
 

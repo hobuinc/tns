@@ -37,7 +37,7 @@ class CloudConfig:
         self.s3_endpoint = s3_endpoint
 
         self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
-        # self.tempdir = TempDir(delete=True)
+        self.tempdir = TempDir(delete=True)
 
         self.s3 = boto3.client("s3", region_name=self.region, verify=False)
 

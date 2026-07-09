@@ -36,14 +36,14 @@ class CloudConfig:
         self.cert_path = cert_path
         self.s3_endpoint = s3_endpoint
 
-        self.cert_dest = None
+        self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
         self.tempdir = TempDir(delete=True)
 
         self.s3 = boto3.client("s3", region_name=self.region, verify=False)
 
         # if CA file exists, grab it from S3 and write it to the temp directory
         if self.cert_path is not None:
-            self.cert_dest = f"{self.tempdir.name}/cert.pem"
+            # self.cert_dest = f"{self.tempdir.name}/cert.pem"
             # bypass ssl cert checking until we get it copied in
             response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
             cert_content = response["Body"].read()

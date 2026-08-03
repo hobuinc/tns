@@ -39,12 +39,12 @@ class CloudConfig:
         self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
         self.tempdir = TempDir(delete=True)
 
+        # bypass ssl cert checking until we get it copied in
         self.s3 = boto3.client("s3", region_name=self.region, verify=False)
 
         # if CA file exists, grab it from S3 and write it to the temp directory
+        # then remake the aws clients with it
         if self.cert_path is not None:
-            # self.cert_dest = f"{self.tempdir.name}/cert.pem"
-            # bypass ssl cert checking until we get it copied in
             response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
             cert_content = response["Body"].read()
             with open(self.cert_dest, "wb") as f:
@@ -53,15 +53,6 @@ class CloudConfig:
                 f"Cert copied from s3://{self.bucket}/{self.cert_path} to "
                 f"{self.cert_dest}"
             )
-
-        # mem limit passed in as value of MB (2**20), GB is (2**30), div by
-        # 2**10 for value of GB here
-        shorter = mem_limit / (2**10)
-        self.mem_limit = f"{shorter}GB"
-
-        # preliminary usage, will need to be remade after writing the cert
-        # if the cert is present, remake the aws clients with it
-        if self.cert_dest is not None:
             self.sns = boto3.client(
                 "sns", region_name=self.region, verify=self.cert_dest
             )
@@ -74,6 +65,10 @@ class CloudConfig:
             self.sqs = boto3.client("sqs", region_name=self.region)
             self.using_certs = False
 
+        # mem limit passed in as value of MB (2**20), GB is (2**30), div by
+        # 2**10 for value of GB here
+        shorter = mem_limit / (2**10)
+        self.mem_limit = f"{shorter}GB"
         self.con = None
 
     def __enter__(self):
@@ -93,6 +88,9 @@ class CloudConfig:
         con.execute("LOAD spatial")
         con.execute("LOAD aws")
         con.execute(f"SET memory_limit='{self.mem_limit}'")
+        if self.cert_dest is not None and os.path.exists(self.cert_dest):
+            con.execute(f"SET ca_cert_file='{self.cert_dest}'")
+
         if self.s3_endpoint is not None:
             ex_str = f"""
                 CREATE SECRET (

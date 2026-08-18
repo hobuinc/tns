@@ -117,10 +117,14 @@ def test_local_config(
 
     td_name = config.tempdir.name
     with config:
-        with TemporaryDirectory() as td:
-            assert os.path.dirname(td) == os.path.dirname(td_name)
+        assert hasattr(config, "active_tempdir")
+        temp_dir_path = config.active_tempdir
+        assert os.path.exists(temp_dir_path)
+        assert "/tmp" in temp_dir_path
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
+    # verify context manager removes temp dir path
+    assert not os.path.exists(temp_dir_path)
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)

@@ -9,6 +9,8 @@ import polars_st as st
 from pathlib import Path
 from time import sleep
 
+# Import the module to manage its global state.
+import intersects_lambda
 from intersects_lambda import CloudConfig
 
 
@@ -22,6 +24,29 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "skip_by_env(env): fine tests based on terraform env."
     )
+
+@pytest.fixture(autouse=True)
+def reset_lambda_global_state(env):
+    """
+    Guarantees test isolation for unit/local tests while preserving the
+    connection for high-throughput deployment/stress tests.
+    """
+    # For 'prod' (deployment) tests, do nothing to keep the connection warm.
+    if env == "prod":
+        yield
+        return
+
+    # For 'test' and 'unit' runs, perform a clean state reset.
+    intersects_lambda.GLOBAL_CONFIG = None
+    yield
+    # Teardown after the test
+    if intersects_lambda.GLOBAL_CONFIG is not None:
+        try:
+            if hasattr(intersects_lambda.GLOBAL_CONFIG, 'con'):
+                intersects_lambda.GLOBAL_CONFIG.con.close()
+        except Exception:
+            pass
+        intersects_lambda.GLOBAL_CONFIG = None
 
 
 def clear_sqs(sqs_arn: str, region: str) -> list:
@@ -304,7 +329,9 @@ def config(
     region: str, bucket_name: str, sns_out: str, prefix: str, mem_size: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    yield CloudConfig(region, sns_out, bucket_name, prefix, mem_size)
+    config_obj = CloudConfig(region, sns_out, bucket_name, prefix, mem_size)
+    intersects_lambda.GLOBAL_CONFIG = config_obj
+    yield config_obj
 
 
 @pytest.fixture(scope="function")
@@ -474,4 +501,6 @@ def low_mem_config(
     region: str, bucket_name: str, sns_out: str, prefix: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    yield CloudConfig(region, sns_out, bucket_name, prefix, 3072)
+    config_obj = CloudConfig(region, sns_out, bucket_name, prefix, 3072)
+    intersects_lambda.GLOBAL_CONFIG = config_obj
+    yield config_obj

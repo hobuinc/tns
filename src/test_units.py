@@ -120,9 +120,11 @@ def test_config():
     # force config.cert_dest to be where the default ca path is and make sure
     # that it's being used in the creation of the
 
-    td_name = config.tempdir.name
     with config:
-        with TemporaryDirectory() as td:
-            assert os.path.dirname(td) == os.path.dirname(td_name)
+        assert hasattr(config, "active_tempdir")
+        temp_dir_path = config.active_tempdir
+        assert os.path.exists(temp_dir_path)
+        assert "/tmp" in temp_dir_path
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
+    assert not os.path.exists(temp_dir_path)

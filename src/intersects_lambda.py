@@ -12,12 +12,35 @@ import os
 import boto3
 import duckdb
 import traceback
-from tempfile import TemporaryDirectory as TempDir
+import shutil
+import glob
+import time
 
 from uuid import uuid4
 
 MAX_MSG_BYTES = 2**10 * 256  # 256KB
 
+# Cache duckdb connections across warm-starts
+GLOBAL_CONFIG = None
+
+
+def clean_stale_temp_dirs():
+    """
+    If a previous container execution suffered a hard crash or a 15-minute Lambda timeout, 
+    the `__exit__` block wouldn't have run, leaving orphaned files in /tmp.
+    This safely sweeps files older than 1 hour when a new container spins up.
+    1 hour leaves enough time for 3 retries.
+    """
+    one_hour_ago = time.time() - 3600
+    for leftover in glob.glob("/tmp/duckdb_*"):
+        try:
+            if os.path.getmtime(leftover) < one_hour_ago:
+                if os.path.isdir(leftover):
+                    shutil.rmtree(leftover, ignore_errors=True)
+                    print(f"Swept orphaned temp directory: {leftover}")
+        except Exception:
+            # Silently ignore if file is locked or rapidly changed by the OS
+            pass
 
 class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
@@ -37,7 +60,6 @@ class CloudConfig:
         self.s3_endpoint = s3_endpoint
 
         self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
-        self.tempdir = TempDir(delete=True)
 
         # bypass ssl cert checking until we get it copied in
         self.s3 = boto3.client("s3", region_name=self.region, verify=False)
@@ -71,25 +93,18 @@ class CloudConfig:
         self.mem_limit = f"{shorter}GB"
         self.con = None
 
-    def __enter__(self):
-        if self.con is not None:
-            try:
-                self.con.execute("select 1")
-                return self
-            except duckdb.ConnectionException:
-                pass
+        self.con = duckdb.connect()
+        self.con.execute("LOAD httpfs")
+        self.con.execute("LOAD spatial")
+        self.con.execute("LOAD aws")
+        self.con.execute(f"SET memory_limit='{self.mem_limit}'")
 
-        con = duckdb.connect()
+        # Prevents runaway spatial queries from filling up the entire Lambda /tmp space 
+        # and crashing the container with a fatal OS Error 28
+        self.con.execute("SET max_temp_directory_size='512MB'")
 
-        # lambdas will automatically write to '/tmp'
-        con.execute(f"SET temp_directory='{self.tempdir.name}'")
-
-        con.execute("LOAD httpfs")
-        con.execute("LOAD spatial")
-        con.execute("LOAD aws")
-        con.execute(f"SET memory_limit='{self.mem_limit}'")
         if self.cert_dest is not None and os.path.exists(self.cert_dest):
-            con.execute(f"SET ca_cert_file='{self.cert_dest}'")
+            self.con.execute(f"SET ca_cert_file='{self.cert_dest}'")
 
         if self.s3_endpoint is not None:
             ex_str = f"""
@@ -106,14 +121,24 @@ class CloudConfig:
                     REGION '{self.region}',
                     PROVIDER CREDENTIAL_CHAIN)
             """
-        con.execute(ex_str)
+        self.con.execute(ex_str)
 
-        self.con = con
+    def __enter__(self):
+        # Dynamically generate an isolated, static path for this specific execution.
+        self.run_id = str(uuid4())
+        self.active_tempdir = f"/tmp/duckdb_{self.run_id}"
+        os.makedirs(self.active_tempdir, exist_ok=True)
+        # Point the warm connection to this isolated folder just before running the query
+        self.con.execute(f"SET temp_directory='{self.active_tempdir}'")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.con.close()
-        self.con = None
+        """
+        Clean up the temp directory after the query finishes to prevent the container 
+        from running out of disk space during high-throughput warm starts.
+        """
+        if hasattr(self, 'active_tempdir') and os.path.exists(self.active_tempdir):
+            shutil.rmtree(self.active_tempdir, ignore_errors=True)
 
 
 def delete_sqs_message(e, config: CloudConfig):
@@ -224,22 +249,29 @@ def get_env_vars(var_name: str):
 def handler(event: dict[str, str], context):
     """Base Lambda handler method which coordinates SQS message processing and
     SNS responses in case of errors."""
+
+    global GLOBAL_CONFIG
+
     sns_out = get_env_vars("SNS_OUT_ARN")
     region = get_env_vars("AWS_REGION")
 
     config = None
     try:
-        bucket = get_env_vars("S3_BUCKET")
-        prefix = get_env_vars("DEPLOY_PREFIX")
-        mem_limit = get_env_vars("MEMORY_LIMIT")
-        s3_endpoint = get_env_vars("AWS_S3_ENDPOINT")
+        # If this is a cold start (first run of the container), initialize config
+        if GLOBAL_CONFIG is None:
+            clean_stale_temp_dirs() # Run the defensive cleanup once on boot
+            bucket = get_env_vars("S3_BUCKET")
+            prefix = get_env_vars("DEPLOY_PREFIX")
+            mem_limit = get_env_vars("MEMORY_LIMIT")
+            s3_endpoint = get_env_vars("AWS_S3_ENDPOINT")
 
-        # on sc/tc, we need a custom certicate to make aws service calls
-        cert_path = get_env_vars("S3_CERT_PATH")
-        mem_limit = int(mem_limit)
-        config = CloudConfig(
-            region, sns_out, bucket, prefix, mem_limit, cert_path, s3_endpoint
-        )
+            # on sc/tc, we need a custom certicate to make aws service calls
+            cert_path = get_env_vars("S3_CERT_PATH")
+            mem_limit = int(mem_limit)
+            GLOBAL_CONFIG = CloudConfig(
+                region, sns_out, bucket, prefix, mem_limit, cert_path, s3_endpoint
+            )
+        config = GLOBAL_CONFIG
     except Exception as e:
         # this section won't work in sc/tc because sns won't have
         # the cert allowing them to connect yet
@@ -287,7 +319,7 @@ def handler(event: dict[str, str], context):
         # split into single event runs to see if that alleviates issues
         try:
             split_events = [{"Records": [e]} for e in events]
-            sns_messages = [handler(re, None)[0] for re in split_events]
+            sns_messages = [handler(re, context)[0] for re in split_events]
             return sns_messages
         except Exception as e:
             exc_str = traceback.format_exc()

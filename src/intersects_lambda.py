@@ -61,12 +61,11 @@ class CloudConfig:
 
         self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
 
-        # bypass ssl cert checking until we get it copied in
-        self.s3 = boto3.client("s3", region_name=self.region, verify=False)
-
         # if CA file exists, grab it from S3 and write it to the temp directory
         # then remake the aws clients with it
         if self.cert_path is not None:
+            # bypass ssl cert checking until we get it copied in
+            self.s3 = boto3.client("s3", region_name=self.region, verify=False)
             response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
             cert_content = response["Body"].read()
             with open(self.cert_dest, "wb") as f:
@@ -81,10 +80,13 @@ class CloudConfig:
             self.sqs = boto3.client(
                 "sqs", region_name=self.region, verify=self.cert_dest
             )
+            # use ssl cert
+            self.s3 = boto3.client("s3", region_name=self.region, verify=self.cert_dest)
             self.using_certs = True
         else:
             self.sns = boto3.client("sns", region_name=self.region)
             self.sqs = boto3.client("sqs", region_name=self.region)
+            self.s3 = boto3.client("s3", region_name=self.region)
             self.using_certs = False
 
         # mem limit passed in as value of MB (2**20), GB is (2**30), div by
@@ -238,7 +240,7 @@ def get_env_vars(var_name: str):
         print(f"Fetching environment variable: {var_name}.")
         print(f"Value: {val}.")
         return val
-    elif var_name == "S3_CERT_PATH":
+    elif var_name == "S3_CERT_PATH" or var_name == "AWS_S3_ENDPOINT":
         return None
     else:
         raise ValueError(
@@ -275,6 +277,8 @@ def handler(event: dict[str, str], context):
     except Exception as e:
         # this section won't work in sc/tc because sns won't have
         # the cert allowing them to connect yet
+        print(f"ERROR: Lambda processing failed. Error: {e}")
+        print(traceback.format_exc())
         sns = boto3.client("sns", region_name=region)
         fail_tb = traceback.format_exc()
         fail_msg = get_fail_res([], fail_tb)
@@ -323,12 +327,14 @@ def handler(event: dict[str, str], context):
             return sns_messages
         except Exception as e:
             exc_str = traceback.format_exc()
+            print(f"ERROR: Lambda processing failed. Error: {exc_str}")
             fail_msg = get_fail_res(data_paths, exc_str)
             config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
             raise e
 
     except Exception as e:
         exc_str = traceback.format_exc()
+        print(f"ERROR: Lambda processing failed. Error: {exc_str}")
         fail_msg = get_fail_res(data_paths, exc_str)
         config.sns.publish(TopicArn=config.sns_out_arn, **fail_msg)
         raise e

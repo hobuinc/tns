@@ -51,10 +51,17 @@ def test_local_config_bad_path(
     """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
-    cert_path = nonexistent_s3_cert_path
-
     with pytest.raises(ClientError):
-        CloudConfig(region, sns_out, bucket_name, prefix, mem_size, cert_path)
+        CloudConfig(
+            region,
+            sns_out,
+            bucket_name,
+            prefix,
+            mem_size,
+            nonexistent_s3_cert_path,
+        )
+
+
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
@@ -108,14 +115,11 @@ def test_local_config(
         config.aois_path
         == f"s3://{bucket_name}/{prefix}/subs/subscriptions.parquet"
     )
-    assert config.tempdir
-    assert os.path.exists(config.tempdir.name)
     assert config.cert_path
     assert os.path.exists(config.cert_dest)
     assert config.using_certs
     assert config.s3_endpoint == s3_endpoint
 
-    td_name = config.tempdir.name
     with config:
         assert hasattr(config, "active_tempdir")
         temp_dir_path = config.active_tempdir

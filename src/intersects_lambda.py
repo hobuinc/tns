@@ -22,11 +22,12 @@ MAX_MSG_BYTES = 2**10 * 256  # 256KB
 
 # Cache duckdb connections across warm-starts
 GLOBAL_CONFIG = None
+CERT_DEST = "/tmp/cert.pem"
 
 
 def clean_stale_temp_dirs():
     """
-    If a previous container execution suffered a hard crash or a 15-minute Lambda timeout, 
+    If a previous container execution suffered a hard crash or a 15-minute Lambda timeout,
     the `__exit__` block wouldn't have run, leaving orphaned files in /tmp.
     This safely sweeps files older than 1 hour when a new container spins up.
     1 hour leaves enough time for 3 retries.
@@ -58,12 +59,17 @@ class CloudConfig:
         self.aois_path = f"s3://{self.bucket}/{sub_key}"
         self.cert_path = cert_path
         self.s3_endpoint = s3_endpoint
+        self.cert_dest = None
 
-        self.cert_dest = os.environ.get('REQUESTS_CA_BUNDLE')
 
         # if CA file exists, grab it from S3 and write it to the temp directory
-        # then remake the aws clients with it
+        # then set necessary environment variables and remake the aws clients
+        # with it
         if self.cert_path is not None:
+            os.environ['REQUESTS_CA_BUNDLE'] = CERT_DEST
+            os.environ['AWS_CA_BUNDLE'] = CERT_DEST
+            self.cert_dest = CERT_DEST
+
             # bypass ssl cert checking until we get it copied in
             self.s3 = boto3.client("s3", region_name=self.region, verify=False)
             response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
@@ -101,7 +107,7 @@ class CloudConfig:
         self.con.execute("LOAD aws")
         self.con.execute(f"SET memory_limit='{self.mem_limit}'")
 
-        # Prevents runaway spatial queries from filling up the entire Lambda /tmp space 
+        # Prevents runaway spatial queries from filling up the entire Lambda /tmp space
         # and crashing the container with a fatal OS Error 28
         self.con.execute("SET max_temp_directory_size='512MB'")
 
@@ -136,7 +142,7 @@ class CloudConfig:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """
-        Clean up the temp directory after the query finishes to prevent the container 
+        Clean up the temp directory after the query finishes to prevent the container
         from running out of disk space during high-throughput warm starts.
         """
         if hasattr(self, 'active_tempdir') and os.path.exists(self.active_tempdir):

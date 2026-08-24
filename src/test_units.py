@@ -114,7 +114,6 @@ def test_config():
         config.aois_path == f"s3://{bucket}/{prefix}/subs/subscriptions.parquet"
     )
     assert config.mem_limit == "5.0GB"
-    assert config.tempdir
     assert not config.using_certs
 
     # force config.cert_dest to be where the default ca path is and make sure

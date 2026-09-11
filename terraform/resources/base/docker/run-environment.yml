@@ -2,6 +2,7 @@ name: 'tns-lambda'
 channels:
   - conda-forge
 dependencies:
+  - python
   - boto3
   - h3-py
   - shapely

@@ -7,12 +7,12 @@ dependencies:
   - boto3
   - awscli
   - python
-  - geopandas
   - pyarrow
-  - python<3.14
-  - gdal
-  - libgdal-arrow-parquet
-  - duckdb
   - polars
   - polars-st
+  - gdal
+  - geopandas
+  - libgdal-arrow-parquet
+  - pyogrio
+  - duckdb
   - pytest

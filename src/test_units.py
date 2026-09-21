@@ -4,12 +4,16 @@ import polars_st as st
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import os.path
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 from intersects_lambda import (
     CloudConfig,
     get_pass_res,
     get_fail_res,
-    apply_compare,
+    apply_compare
 )
+from duckdb import OutOfMemoryException
 
 
 def test_compare(small_tiles_path: Path, small_aois_path: Path):
@@ -127,3 +131,56 @@ def test_config():
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
     assert not os.path.exists(temp_dir_path)
+
+def test_mem_handle(monkeypatch):
+    """
+    Verify that an OutOfMemoryException causes the event batch to be split
+    into single-record tasks and retried.
+    """
+    # import localized to avoid mucking
+    import intersects_lambda
+    region = "us-east-1"
+    sns_arn = "fake-arn::asdf"
+    bucket = "fake-bucket"
+    prefix = "fake"
+    mem_limit = 5
+
+    config = CloudConfig(region, sns_arn, bucket, prefix, mem_limit)
+    config.sns = Mock()
+    config.sqs = Mock()
+
+    event = {"Records": [{}, {}]}
+
+    monkeypatch.setenv("SNS_OUT_ARN", "fake:arn")
+    monkeypatch.setenv("AWS_REGION", 'us-fake-1')
+    monkeypatch.setattr(intersects_lambda, "GLOBAL_CONFIG", config)
+
+    monkeypatch.setattr(
+        intersects_lambda,
+        "get_data_paths",
+        lambda x: ["asdf.parquet", "asdf2.parquet"]
+    )
+
+    delete_sqs_message = Mock()
+    monkeypatch.setattr(
+        intersects_lambda,
+        "delete_sqs_message",
+        delete_sqs_message,
+    )
+
+    # force oom, respond with normal responses after
+    apply_compare = Mock(
+        side_effect=[
+            OutOfMemoryException(),
+            {},
+            {}
+        ]
+    )
+    monkeypatch.setattr(intersects_lambda, "apply_compare", apply_compare)
+
+    results = intersects_lambda.handler(event, None)
+
+    assert results == [{},{}]
+    assert apply_compare.call_count == 3
+    assert delete_sqs_message.call_count == 2
+    assert config.sns.publish.call_count == 2

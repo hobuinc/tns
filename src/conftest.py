@@ -4,13 +4,13 @@ from typing import Generator, TypeVar
 import pytest
 import json
 import boto3
-import polars_st as st
+import polars_st
+import duckdb
 
 from pathlib import Path
 from time import sleep
 
 # Import the module to manage its global state.
-import intersects_lambda
 from intersects_lambda import CloudConfig
 
 
@@ -25,28 +25,6 @@ def pytest_configure(config):
         "markers", "skip_by_env(env): fine tests based on terraform env."
     )
 
-@pytest.fixture(autouse=True)
-def reset_lambda_global_state(env):
-    """
-    Guarantees test isolation for unit/local tests while preserving the
-    connection for high-throughput deployment/stress tests.
-    """
-    # For 'prod' (deployment) tests, do nothing to keep the connection warm.
-    if env == "prod":
-        yield
-        return
-
-    # For 'test' and 'unit' runs, perform a clean state reset.
-    intersects_lambda.GLOBAL_CONFIG = None
-    yield
-    # Teardown after the test
-    if intersects_lambda.GLOBAL_CONFIG is not None:
-        try:
-            if hasattr(intersects_lambda.GLOBAL_CONFIG, 'con'):
-                intersects_lambda.GLOBAL_CONFIG.con.close()
-        except Exception:
-            pass
-        intersects_lambda.GLOBAL_CONFIG = None
 
 
 def clear_sqs(sqs_arn: str, region: str) -> list:
@@ -103,9 +81,12 @@ def put_parquet(
     filepath: Path,
 ) -> None:
     """Use polars_st to copy a parquet file to S3."""
+    import pyogrio
+    drivers = [a for a in pyogrio.list_drivers().keys() if 'ARQUET' in a.upper()]
+    print('drivers:', drivers)
     outpath = f"/vsis3/{bucket}/{key}"
-    local = st.read_file(filepath)
-    local = local.with_columns(st.geom().st.set_srid(4326))
+    local = polars_st.read_file(f'PARQUET:{filepath}')
+    local = local.with_columns(polars_st.geom().st.set_srid(4326))
     local.st.write_file(
         outpath, driver="PARQUET", compression="zstd", row_group_size=100000
     )
@@ -136,14 +117,14 @@ def get_event(messages: dict[str, any], sqs_arn: str, region: str) -> EventType:
     }
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session", autouse=True)
 def tf_dir(test_dir: Path) -> Fixture[Path]:
     """Terraform directory."""
     tf_dir = test_dir / ".." / "terraform"
     yield tf_dir
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session", autouse=True)
 def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
     """Get terraform output and translate to dictionary."""
     tf = subprocess.Popen(
@@ -170,11 +151,8 @@ def env(tf_output: dict[str, str]) -> Fixture[str]:
     test means test env is deployed, only run test_lambdas.
     prod means prod env is deployed, only run test_deployment.
     """
-    try:
-        env = tf_output["env"]
-        yield env
-    except KeyError:
-        yield "unit"
+    env = tf_output["env"]
+    yield env
 
 
 @pytest.fixture(scope="function")
@@ -313,7 +291,7 @@ def bad_s3_cert_path(bad_cert: Path, config: CloudConfig, prefix: str) -> Fixtur
     yield cert_path
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="function", autouse=True)
 def env_vars(tf_output: dict[str, str]) -> None:
     """Push Terraform output to the environment for lamdba code to pull from."""
     os.environ["DEPLOY_PREFIX"] = tf_output["prefix"]
@@ -324,17 +302,32 @@ def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["MEMORY_LIMIT"] = str(tf_output["lambda_memory_size"])
 
 
+@pytest.fixture(scope="session", autouse=True)
+def duckdb_extensions():
+    # create extensions
+    # possible they could fail to be created if using SC/TC environments
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL httpfs")
+        con.execute("INSTALL spatial")
+        con.execute("INSTALL aws")
+        con.close()
+    except Exception:
+        pass
+
+
 @pytest.fixture(scope="function")
 def config(
     region: str, bucket_name: str, sns_out: str, prefix: str, mem_size: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
+
     config_obj = CloudConfig(region, sns_out, bucket_name, prefix, mem_size)
-    intersects_lambda.GLOBAL_CONFIG = config_obj
+
     yield config_obj
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session", autouse=True)
 def test_dir() -> Fixture[Path]:
     """Directory path of this file (conftest.py)."""
     yield Path(os.path.dirname(os.path.abspath(__file__)))
@@ -501,6 +494,5 @@ def low_mem_config(
     region: str, bucket_name: str, sns_out: str, prefix: str
 ) -> Fixture[CloudConfig]:
     """CloudConfig object made from Terraform output values."""
-    config_obj = CloudConfig(region, sns_out, bucket_name, prefix, 3072)
-    intersects_lambda.GLOBAL_CONFIG = config_obj
+    config_obj = CloudConfig(region, sns_out, bucket_name, prefix, 2000)
     yield config_obj

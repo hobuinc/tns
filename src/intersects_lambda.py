@@ -95,6 +95,10 @@ class CloudConfig:
             self.s3 = boto3.client("s3", region_name=self.region)
             self.using_certs = False
 
+        # Dynamically generate an isolated, static path for temp files.
+        self.temp_id = str(uuid4())
+        self.active_tempdir = f"/tmp/duckdb_{self.temp_id}"
+
         # mem limit passed in as value of MB (2**20), GB is (2**30), div by
         # 2**10 for value of GB here
         shorter = mem_limit / (2**10)
@@ -132,12 +136,13 @@ class CloudConfig:
         self.con.execute(ex_str)
 
     def __enter__(self):
-        # Dynamically generate an isolated, static path for this specific execution.
-        self.run_id = str(uuid4())
-        self.active_tempdir = f"/tmp/duckdb_{self.run_id}"
         os.makedirs(self.active_tempdir, exist_ok=True)
         # Point the warm connection to this isolated folder just before running the query
-        self.con.execute(f"SET temp_directory='{self.active_tempdir}'")
+
+        query = self.con.execute("SELECT current_setting('temp_directory') as td")
+        cur_td = query.df().td[0]
+        if cur_td == '.tmp': # default temp directory value
+            self.con.execute(f"SET temp_directory='{self.active_tempdir}'")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

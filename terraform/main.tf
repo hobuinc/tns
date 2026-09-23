@@ -29,6 +29,7 @@ module tns_base {
 module tns_lambdas {
     # only make this in prod env #
     count = var.env == "prod" ? 1 : 0
+
     source = "./resources/lambdas"
     conda_env_name = var.conda_env_name
     prefix = var.deploy_prefix
@@ -42,6 +43,11 @@ module tns_lambdas {
 
     sqs_in_arn = module.tns_base.sqs_in_arn
     sns_out_arn = module.tns_base.sns_out_arn
+
+    # cert layer inputs
+    env_name = var.env_name
+    ca_path = var.ca_path
+    pem_path = var.pem_path
 }
 
 ####################################
@@ -66,6 +72,29 @@ variable env {
         condition = can(regex("^(prod|test)$", var.env))
         error_message = "prod or test are only available env types."
     }
+}
+
+variable env_name {
+    description = "Which environment TNS is being deployed to: [UC/TG/SC/TC]."
+    type = string
+    default = "UC"
+    validation {
+        condition = can(regex("^(UC|TG|SC|TC)$", var.env_name))
+        error_message = "env_name must be one of: UC, TG, SC, TC."
+    }
+
+}
+
+variable ca_path {
+    description = "Path to cert file."
+    type = string
+    default = ""
+}
+
+variable pem_path {
+    description = "Path to pem file."
+    type = string
+    default = ""
 }
 
 variable conda_env_name {

@@ -22,9 +22,8 @@ EventType = dict[str, list[dict[str, any]]]
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "skip_by_env(env): fine tests based on terraform env."
+        "markers", "skip_by_env(env): define tests based on terraform env."
     )
-
 
 
 def clear_sqs(sqs_arn: str, region: str) -> list:
@@ -300,6 +299,8 @@ def env_vars(tf_output: dict[str, str]) -> None:
     os.environ["S3_BUCKET"] = tf_output["s3_bucket_name"]
     os.environ["S3_CERT_PATH"] = tf_output["s3_cert_path"]
     os.environ["MEMORY_LIMIT"] = str(tf_output["lambda_memory_size"])
+    conda_prefix = os.environ.get("CONDA_PREFIX") or os.sys.prefix
+    print(conda_prefix)
 
 
 @pytest.fixture(scope="session", autouse=True)

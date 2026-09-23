@@ -199,9 +199,7 @@ def test_handler(
     bucket_name: str,
     prefix: str,
     event: EventType,
-    # config: CloudConfig,
     aoi_fill: None,
-    # env_vars: None,
 ):
     """
     Test that lambda function is correctly interacting with supporting
@@ -299,7 +297,6 @@ def test_mem_failure(
     region: str,
     mem_test_event: EventType,
     big_aoi_fill: None,
-    # env_vars: None,
 ):
     """
     Test that we get failure messages if TNS runs out of memory even after
@@ -312,7 +309,7 @@ def test_mem_failure(
     prev = os.environ.pop("MEMORY_LIMIT")
     os.environ["MEMORY_LIMIT"] = "5"
     # prev_config = GLOBAL_CONFIG
-    intersects_lambda.GLOBAL_CONFIG = None
+    # intersects_lambda.GLOBAL_CONFIG = None
     # assert GLOBAL_CONFIG is None
     # GLOBAL_CONFIG='asdfasdf'
 

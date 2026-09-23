@@ -29,7 +29,7 @@ RUN mamba env create -f run-environment.yml --yes
 
 
 SHELL ["conda", "run", "-n", "build", "/bin/bash", "-c"]
-RUN conda-pack -n ${CONDA_ENV_NAME} --dest-prefix=/var/task -o /tmp/env.tar
+RUN conda-pack -n ${CONDA_ENV_NAME} --dest-prefix=/var/task -o /tmp/env.tar --ignore-missing-files
 RUN mkdir /venv
 RUN cd /venv && tar xf /tmp/env.tar  && rm /tmp/env.tar
 

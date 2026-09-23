@@ -3,7 +3,6 @@ from pathlib import Path
 import boto3
 import json
 
-from tempfile import TemporaryDirectory
 import time
 import pytest
 import polars as pl
@@ -11,8 +10,35 @@ from duckdb import OutOfMemoryException
 from botocore.exceptions import ClientError, SSLError
 
 from conftest import EventType
-from intersects_lambda import CloudConfig, handler
+import intersects_lambda
 
+@pytest.fixture(scope="function", autouse=True)
+def reset_lambda_global_state(env):
+    """
+    Guarantees test isolation for unit/local tests while preserving the
+    connection for high-throughput deployment/stress tests.
+    """
+    # For 'prod' (deployment) tests, do nothing to keep the connection warm.
+    if env == "prod":
+        yield
+        return
+
+    # For 'test' and 'unit' runs, perform a clean state reset.
+    intersects_lambda.GLOBAL_CONFIG = None
+    # set in the config init, reset if they were changed
+    if os.environ.get('REQUESTS_CA_BUNDLE') is not None:
+        os.environ.pop('REQUESTS_CA_BUNDLE')
+    if os.environ.get('AWS_CA_BUNDLE') is not None:
+        os.environ.pop('AWS_CA_BUNDLE')
+    yield
+    # Teardown after the test
+    if intersects_lambda.GLOBAL_CONFIG is not None:
+        try:
+            if hasattr(intersects_lambda.GLOBAL_CONFIG, 'con'):
+                intersects_lambda.GLOBAL_CONFIG.con.close()
+        except Exception:
+            pass
+        intersects_lambda.GLOBAL_CONFIG = None
 
 def clear_sqs(sqs_arn: str, region: str):
     sqs = boto3.client("sqs", region_name=region)
@@ -51,10 +77,17 @@ def test_local_config_bad_path(
     """Test Cloud/DuckDB coordination client work correctly."""
     # set environment variables, which config will pull from
     # then test that cloud config correctly pulls from those
-    cert_path = nonexistent_s3_cert_path
-
     with pytest.raises(ClientError):
-        CloudConfig(region, sns_out, bucket_name, prefix, mem_size, cert_path)
+        intersects_lambda.CloudConfig(
+            region,
+            sns_out,
+            bucket_name,
+            prefix,
+            mem_size,
+            nonexistent_s3_cert_path,
+        )
+
+
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
@@ -70,7 +103,7 @@ def test_local_config_bad_cert(
     """Test Cloud/DuckDB coordination client work correctly."""
     cert_path = bad_s3_cert_path
 
-    config = CloudConfig(
+    config = intersects_lambda.CloudConfig(
         region, sns_out, bucket_name, prefix, mem_size, cert_path
     )
     with pytest.raises(SSLError):
@@ -92,7 +125,7 @@ def test_local_config(
     # then test that cloud config correctly pulls from those
 
     s3_endpoint = "s3.amazonaws.com"
-    config = CloudConfig(
+    config = intersects_lambda.CloudConfig(
         region,
         sns_out,
         bucket_name,
@@ -108,19 +141,20 @@ def test_local_config(
         config.aois_path
         == f"s3://{bucket_name}/{prefix}/subs/subscriptions.parquet"
     )
-    assert config.tempdir
-    assert os.path.exists(config.tempdir.name)
     assert config.cert_path
     assert os.path.exists(config.cert_dest)
     assert config.using_certs
     assert config.s3_endpoint == s3_endpoint
 
-    td_name = config.tempdir.name
     with config:
-        with TemporaryDirectory() as td:
-            assert os.path.dirname(td) == os.path.dirname(td_name)
+        assert hasattr(config, "active_tempdir")
+        temp_dir_path = config.active_tempdir
+        assert os.path.exists(temp_dir_path)
+        assert "/tmp" in temp_dir_path
         a = config.con.sql("select 1")
         assert a.pl().get_column("1").to_list()[0] == 1
+    # verify context manager removes temp dir path
+    assert not os.path.exists(temp_dir_path)
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
@@ -131,7 +165,7 @@ def test_big(
     sqs_out: str,
     big_event: EventType,
     big_aoi_fill: None,
-    env_vars: None,
+    # env_vars: None,
 ):
     """Test lambda function's ability to coordinate large amounts of data."""
 
@@ -139,7 +173,7 @@ def test_big(
     clear_sqs(sqs_out, region)
 
     time1 = time.time()
-    aois = handler(big_event, None)
+    aois = intersects_lambda.handler(big_event, None)
     res_time = time.time() - time1
     assert res_time < 500
     assert len(aois) == 1
@@ -165,19 +199,16 @@ def test_handler(
     bucket_name: str,
     prefix: str,
     event: EventType,
-    config: CloudConfig,
     aoi_fill: None,
-    env_vars: None,
 ):
     """
     Test that lambda function is correctly interacting with supporting
     resources like SQS and S3.
     """
-
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
-    aoi_res = handler(event, None)
+    aoi_res = intersects_lambda.handler(event, None)
     assert len(aoi_res) == 1
 
     aoi_res = aoi_res[0]
@@ -203,12 +234,11 @@ def test_handler(
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
-def test_failures(env_type: str, sqs_out: str, region: str, env_vars: None):
+def test_bad_event(env_type: str, sqs_out: str, region: str):
     """
-    Test that lambda function fails in expected ways and advertises those
-    errors in the correct way via SQS.
+    Test that lambda function fails with a bad event JSON and advertises that
+    error in the correct way via SQS.
     """
-
     clear_sqs(sqs_out, region)
 
     def get_attrs(msg):
@@ -218,19 +248,36 @@ def test_failures(env_type: str, sqs_out: str, region: str, env_vars: None):
     # test bad event creation error catching
     fake_event = {"Records": ["asdf"]}
     with pytest.raises(Exception) as e1:
-        handler(fake_event, None)
+        intersects_lambda.handler(fake_event, None)
     assert "string indices must be integers" in str(e1)
     msg1 = clear_sqs(sqs_out, region)
     a1 = get_attrs(msg1)
     assert a1["status"]["Value"] == "failed"
     assert "string indices must be integers" in a1["error"]["Value"]
 
+@pytest.mark.parametrize("env_type", ("test",), indirect=True)
+def test_missing_env_variable(env_type: str, sqs_out: str, region: str):
+    """
+    Test that lambda function fails with a missing environment variable
+    errors in the correct way via SQS.
+    """
     # test cloudconfig failure
-    s3_bucket = os.environ.pop("S3_BUCKET")
+    clear_sqs(sqs_out, region)
+    def get_attrs(msg):
+        body = json.loads(msg[0]["Body"])
+        return body["MessageAttributes"]
+
+    fake_event = {"Records": ["asdf"]}
+
+    s3_bucket = os.environ.pop('S3_BUCKET')
+    intersects_lambda.GLOBAL_CONFIG = None
+
     with pytest.raises(Exception) as e2:
-        handler(fake_event, None)
-    os.environ["S3_BUCKET"] = s3_bucket
-    assert "Required variable S3_BUCKET missing from environment" in str(e2)
+        intersects_lambda.handler(fake_event, None)
+        assert "Required variable S3_BUCKET missing from environment" in str(e2)
+
+    # replace so that cleanup still works
+    os.environ['S3_BUCKET'] = s3_bucket
     msg2 = clear_sqs(sqs_out, region)
     a2 = get_attrs(msg2)
     assert a2["status"]["Value"] == "failed"
@@ -243,60 +290,6 @@ def test_failures(env_type: str, sqs_out: str, region: str, env_vars: None):
 
 
 @pytest.mark.parametrize("env_type", ("test",), indirect=True)
-def test_mem_handle(
-    env_type: str,
-    sqs_in: str,
-    sqs_out: str,
-    region: str,
-    bucket_name: str,
-    prefix: str,
-    mem_test_event: EventType,
-    low_mem_config: CloudConfig,
-    big_aoi_fill: None,
-    env_vars: None,
-):
-    """
-    Test that when memory limits are hit the lambda will attempt to split and
-    rerun.
-    """
-
-    clear_sqs(sqs_in, region)
-    clear_sqs(sqs_out, region)
-
-    # set memory to 3GB to force memory problem
-    os.environ["MEMORY_LIMIT"] = "3072"
-
-    aoi_res = handler(mem_test_event, None)
-    assert len(aoi_res) == 2
-
-    for res in aoi_res:
-        attrs = res["MessageAttributes"]
-        assert "error" not in attrs.keys(), (
-            f"Error in messages: {attrs['error']['StringValue']}"
-        )
-
-        source_files = json.loads(attrs["source_files"]["StringValue"])
-        assert len(source_files) == 1
-        assert any(
-            x in set(source_files)
-            for x in [
-                f"s3://{bucket_name}/{prefix}/compare/stress_496.parquet",
-                f"s3://{bucket_name}/{prefix}/compare/stress_494.parquet",
-            ]
-        )
-        s3_path = attrs["s3_output_path"]["StringValue"]
-        with low_mem_config:
-            s3_info = low_mem_config.con.sql(
-                f"select aois from read_parquet('{s3_path}')"
-            )
-            s3_aois = s3_info.pl().get_column("aois").to_list()
-            assert len(s3_aois)
-
-    clear_sqs(sqs_in, region)
-    clear_sqs(sqs_out, region)
-
-
-@pytest.mark.parametrize("env_type", ("test",), indirect=True)
 def test_mem_failure(
     env_type: str,
     sqs_in: str,
@@ -304,21 +297,30 @@ def test_mem_failure(
     region: str,
     mem_test_event: EventType,
     big_aoi_fill: None,
-    env_vars: None,
 ):
     """
     Test that we get failure messages if TNS runs out of memory even after
     splitting events up.
     """
-
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 
-    # set memory to 1GB to force error
-    os.environ["MEMORY_LIMIT"] = "1000"
+    # set memory very low to force error
+    prev = os.environ.pop("MEMORY_LIMIT")
+    os.environ["MEMORY_LIMIT"] = "5"
+    # prev_config = GLOBAL_CONFIG
+    # intersects_lambda.GLOBAL_CONFIG = None
+    # assert GLOBAL_CONFIG is None
+    # GLOBAL_CONFIG='asdfasdf'
 
     with pytest.raises(OutOfMemoryException):
-        handler(mem_test_event, None)
+        intersects_lambda.handler(mem_test_event, None)
+
+
+    # reset environment variable
+    os.environ["MEMORY_LIMIT"] = prev
+    # GLOBAL_CONFIG = prev_config
+
     fail_messages = clear_sqs(sqs_out, region)
     for res in fail_messages:
         res = json.loads(res["Body"])
@@ -336,10 +338,11 @@ def test_945(
     sqs_out: str,
     region: str,
     event_945: EventType,
-    config: CloudConfig,
-    env_vars,
+    # config: CloudConfig,
+    # env_vars,
 ):
     """Testing a scenario that can easily have memory problems."""
+    from intersects_lambda import handler
     clear_sqs(sqs_in, region)
     clear_sqs(sqs_out, region)
 

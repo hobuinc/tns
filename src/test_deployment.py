@@ -288,7 +288,7 @@ def test_lambda(
         raise e
 
 
-@pytest.mark.skip(reason="Manually run only.")
+# @pytest.mark.skip(reason="Manually run only.")
 @pytest.mark.parametrize("env_type", ("prod",), indirect=True)
 def test_many_small_tiles(
     env_type,
@@ -299,8 +299,9 @@ def test_many_small_tiles(
     sqs_in: str,
     dlq_out: str,
     dlq_in: str,
-    aoi_fill: None,
     cities_path: Path,
+    prefix: str,
+    aoi_fill: None,
 ):
     """
     Test small file performance by pushing files with 1 tile in them and
@@ -340,6 +341,7 @@ def test_many_small_tiles(
                 cleanup_list.append(key)
                 executor.submit(write_one, city, vsis_path)
         max_wait_time_s = 300  # 5min per 1M
+        lambda_name = f"{prefix}_tns_comp_lambda"
         stress_test_common(
             key_set,
             cleanup_list,
@@ -350,6 +352,7 @@ def test_many_small_tiles(
             bucket_name,
             start_time,
             max_wait_time_s,
+            lambda_name
         )
     except Exception as e:
         clear_sqs(sqs_out, region)

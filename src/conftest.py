@@ -144,13 +144,13 @@ def tf_output(tf_dir: Path) -> Fixture[dict[str, str]]:
 
 
 @pytest.fixture(scope="function")
-def env(tf_output: dict[str, str]) -> Fixture[str]:
+def env(tf_output: dict[str, str]) -> Fixture[str | None]:
     """Deployment type, determines which tests to run.
     unit means nothing is deployed, only run test_units.
     test means test env is deployed, only run test_lambdas.
     prod means prod env is deployed, only run test_deployment.
     """
-    env = tf_output["env"]
+    env = tf_output.get("env")
     yield env
 
 

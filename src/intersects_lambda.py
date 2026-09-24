@@ -22,7 +22,6 @@ MAX_MSG_BYTES = 2**10 * 256  # 256KB
 
 # Cache duckdb connections across warm-starts
 GLOBAL_CONFIG = None
-CERT_DEST = "/tmp/cert.pem"
 
 
 def clean_stale_temp_dirs():
@@ -43,12 +42,19 @@ def clean_stale_temp_dirs():
             # Silently ignore if file is locked or rapidly changed by the OS
             pass
 
+
 class CloudConfig:
     """Coordinate AWS and DuckDB connections and associated information."""
 
     def __init__(
-        self, region, sns_out_arn, bucket, prefix, mem_limit, cert_path=None,
-        s3_endpoint=None
+        self,
+        region,
+        sns_out_arn,
+        bucket,
+        prefix,
+        mem_limit,
+        cert_path=None,
+        s3_endpoint=None,
     ):
         self.region = region
         self.sns_out_arn = sns_out_arn
@@ -59,35 +65,23 @@ class CloudConfig:
         self.aois_path = f"s3://{self.bucket}/{sub_key}"
         self.cert_path = cert_path
         self.s3_endpoint = s3_endpoint
-        self.cert_dest = None
 
-
-        # if CA file exists, grab it from S3 and write it to the temp directory
-        # then set necessary environment variables and remake the aws clients
-        # with it
+        # If a CA file is provided by the Lambda layer, use it directly for
+        # AWS and DuckDB connections.
         if self.cert_path is not None:
-            os.environ['REQUESTS_CA_BUNDLE'] = CERT_DEST
-            os.environ['AWS_CA_BUNDLE'] = CERT_DEST
-            self.cert_dest = CERT_DEST
+            os.environ["REQUESTS_CA_BUNDLE"] = self.cert_path
+            os.environ["AWS_CA_BUNDLE"] = self.cert_path
 
-            # bypass ssl cert checking until we get it copied in
-            self.s3 = boto3.client("s3", region_name=self.region, verify=False)
-            response = self.s3.get_object(Bucket=self.bucket, Key=self.cert_path)
-            cert_content = response["Body"].read()
-            with open(self.cert_dest, "wb") as f:
-                f.write(cert_content)
-            print(
-                f"Cert copied from s3://{self.bucket}/{self.cert_path} to "
-                f"{self.cert_dest}"
-            )
             self.sns = boto3.client(
-                "sns", region_name=self.region, verify=self.cert_dest
+                "sns", region_name=self.region, verify=self.cert_path
             )
             self.sqs = boto3.client(
-                "sqs", region_name=self.region, verify=self.cert_dest
+                "sqs", region_name=self.region, verify=self.cert_path
             )
             # use ssl cert
-            self.s3 = boto3.client("s3", region_name=self.region, verify=self.cert_dest)
+            self.s3 = boto3.client(
+                "s3", region_name=self.region, verify=self.cert_path
+            )
             self.using_certs = True
         else:
             self.sns = boto3.client("sns", region_name=self.region)
@@ -115,8 +109,8 @@ class CloudConfig:
         # and crashing the container with a fatal OS Error 28
         self.con.execute("SET max_temp_directory_size='512MB'")
 
-        if self.cert_dest is not None and os.path.exists(self.cert_dest):
-            self.con.execute(f"SET ca_cert_file='{self.cert_dest}'")
+        if self.cert_path is not None and os.path.exists(self.cert_path):
+            self.con.execute(f"SET ca_cert_file='{self.cert_path}'")
 
         if self.s3_endpoint is not None:
             ex_str = f"""
@@ -137,20 +131,25 @@ class CloudConfig:
 
     def __enter__(self):
         os.makedirs(self.active_tempdir, exist_ok=True)
-        # Point the warm connection to this isolated folder just before running the query
 
-        query = self.con.execute("SELECT current_setting('temp_directory') as td")
+        # Point the warm connection to temp folder before running the query
+        query = self.con.execute(
+            "SELECT current_setting('temp_directory') as td"
+        )
         cur_td = query.df().td[0]
-        if cur_td == '.tmp': # default temp directory value
+        if cur_td == ".tmp":  # default temp directory value
             self.con.execute(f"SET temp_directory='{self.active_tempdir}'")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """
-        Clean up the temp directory after the query finishes to prevent the container
-        from running out of disk space during high-throughput warm starts.
+        Clean up the temp directory after the query finishes to prevent the
+        container from running out of disk space during high-throughput warm
+        starts.
         """
-        if hasattr(self, 'active_tempdir') and os.path.exists(self.active_tempdir):
+        if hasattr(self, "active_tempdir") and os.path.exists(
+            self.active_tempdir
+        ):
             shutil.rmtree(self.active_tempdir, ignore_errors=True)
 
 
@@ -251,7 +250,7 @@ def get_env_vars(var_name: str):
         print(f"Fetching environment variable: {var_name}.")
         print(f"Value: {val}.")
         return val
-    elif var_name == "S3_CERT_PATH" or var_name == "AWS_S3_ENDPOINT":
+    elif var_name in ("CERT_PATH", "AWS_S3_ENDPOINT"):
         return None
     else:
         raise ValueError(
@@ -270,19 +269,24 @@ def handler(event: dict[str, str], context):
 
     config = None
     try:
-        # If this is a cold start (first run of the container), initialize config
+        # If this is a cold start, initialize config
         if GLOBAL_CONFIG is None:
-            clean_stale_temp_dirs() # Run the defensive cleanup once on boot
+            clean_stale_temp_dirs()  # Run the defensive cleanup once on boot
             bucket = get_env_vars("S3_BUCKET")
             prefix = get_env_vars("DEPLOY_PREFIX")
             mem_limit = get_env_vars("MEMORY_LIMIT")
             s3_endpoint = get_env_vars("AWS_S3_ENDPOINT")
+            cert_path = get_env_vars("CERT_PATH")
 
-            # on sc/tc, we need a custom certicate to make aws service calls
-            cert_path = get_env_vars("S3_CERT_PATH")
             mem_limit = int(mem_limit)
             GLOBAL_CONFIG = CloudConfig(
-                region, sns_out, bucket, prefix, mem_limit, cert_path, s3_endpoint
+                region,
+                sns_out,
+                bucket,
+                prefix,
+                mem_limit,
+                cert_path,
+                s3_endpoint,
             )
         config = GLOBAL_CONFIG
     except Exception as e:
@@ -306,9 +310,10 @@ def handler(event: dict[str, str], context):
             for sqs_event in events:
                 data_paths = data_paths + get_data_paths(sqs_event)
             if not data_paths:
-                print("No GeoParquet files found in events."
-                      "If the lambda was started by an 's3:TestEvent' then "
-                      "this is expected.")
+                print(
+                    "No GeoParquet files found in events. If the lambda was"
+                    "started by an 's3:TestEvent' then this is expected."
+                )
 
             # process data paths together
             name = uuid4()

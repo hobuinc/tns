@@ -1,5 +1,9 @@
 locals {
-  lambda_cert_dest = "/tmp/cert.pem"
+    lambda_cert_path = (
+        length(aws_lambda_layer_version.cert_layer) > 0 ?
+        "/opt/cert.pem" :
+        ""
+    )
 }
 
 resource "aws_lambda_function" "compare_function" {
@@ -29,8 +33,9 @@ resource "aws_lambda_function" "compare_function" {
       S3_BUCKET : var.bucket_name
       DEPLOY_PREFIX : var.prefix
       MEMORY_LIMIT : var.memory_size
-      S3_CERT_PATH : var.s3_cert_path
+    #   S3_CERT_PATH : var.s3_cert_path
       AWS_S3_ENDPOINT : var.s3_endpoint
+      CERT_PATH : local.lambda_cert_path
     }
   }
 

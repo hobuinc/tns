@@ -66,29 +66,6 @@ class CloudConfig:
         self.cert_path = cert_path
         self.s3_endpoint = s3_endpoint
 
-        # If a CA file is provided by the Lambda layer, use it directly for
-        # AWS and DuckDB connections.
-        if self.cert_path is not None:
-            os.environ["REQUESTS_CA_BUNDLE"] = self.cert_path
-            os.environ["AWS_CA_BUNDLE"] = self.cert_path
-
-            self.sns = boto3.client(
-                "sns", region_name=self.region, verify=self.cert_path
-            )
-            self.sqs = boto3.client(
-                "sqs", region_name=self.region, verify=self.cert_path
-            )
-            # use ssl cert
-            self.s3 = boto3.client(
-                "s3", region_name=self.region, verify=self.cert_path
-            )
-            self.using_certs = True
-        else:
-            self.sns = boto3.client("sns", region_name=self.region)
-            self.sqs = boto3.client("sqs", region_name=self.region)
-            self.s3 = boto3.client("s3", region_name=self.region)
-            self.using_certs = False
-
         # Dynamically generate an isolated, static path for temp files.
         self.temp_id = str(uuid4())
         self.active_tempdir = f"/tmp/duckdb_{self.temp_id}"
@@ -103,14 +80,34 @@ class CloudConfig:
         self.con.execute("LOAD httpfs")
         self.con.execute("LOAD spatial")
         self.con.execute("LOAD aws")
-        self.con.execute(f"SET memory_limit='{self.mem_limit}'")
 
-        # Prevents runaway spatial queries from filling up the entire Lambda /tmp space
-        # and crashing the container with a fatal OS Error 28
+        # limit memory and overflow dir size
+        self.con.execute(f"SET memory_limit='{self.mem_limit}'")
         self.con.execute("SET max_temp_directory_size='512MB'")
 
+        # If a CA file is provided by the Lambda layer, use it directly for
+        # AWS and DuckDB connections.
         if self.cert_path is not None and os.path.exists(self.cert_path):
+            os.environ["REQUESTS_CA_BUNDLE"] = self.cert_path
+            os.environ["AWS_CA_BUNDLE"] = self.cert_path
             self.con.execute(f"SET ca_cert_file='{self.cert_path}'")
+
+            self.sns = boto3.client(
+                "sns", region_name=self.region, verify=self.cert_path
+            )
+            self.sqs = boto3.client(
+                "sqs", region_name=self.region, verify=self.cert_path
+            )
+            self.s3 = boto3.client(
+                "s3", region_name=self.region, verify=self.cert_path
+            )
+            self.using_certs = True
+        else:
+            self.sns = boto3.client("sns", region_name=self.region)
+            self.sqs = boto3.client("sqs", region_name=self.region)
+            self.s3 = boto3.client("s3", region_name=self.region)
+            self.using_certs = False
+
 
         if self.s3_endpoint is not None:
             ex_str = f"""

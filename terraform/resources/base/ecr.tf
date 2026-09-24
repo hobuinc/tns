@@ -1,45 +1,45 @@
-data aws_region current { }
-data "aws_caller_identity" "current" { }
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
 
-variable ecr_image_uri {
-    type=string
+variable "ecr_image_uri" {
+  type = string
 }
-variable env {
-    type=string
+variable "env" {
+  type = string
 }
 
 locals {
-    ecr_repository_name = "${var.prefix}_tns_ecr"
-    platform = "linux/amd64"
-    image_tag = "amd64"
-    rie_arch = "x86_64"
-    python_version = "3.13"
-    lambda_base_image = "amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
-    image_uri = (var.ecr_image_uri == "" ?
-        "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.image_tag}" :
-        "${var.ecr_image_uri}"
-    )
-    ecr_script_path = "${path.module}/../../../scripts/docker_init"
+  ecr_repository_name = "${var.prefix}_tns_ecr"
+  platform            = "linux/amd64"
+  image_tag           = "amd64"
+  rie_arch            = "x86_64"
+  python_version      = "3.13"
+  lambda_base_image   = "amazon/aws-lambda-provided:al2023.2025.12.22.12-x86_64"
+  image_uri = (var.ecr_image_uri == "" ?
+    "${aws_ecr_repository.runner_ecr_repo[0].repository_url}:${local.image_tag}" :
+    "${var.ecr_image_uri}"
+  )
+  ecr_script_path = "${path.module}/../../../scripts/docker_init"
 }
 
-resource aws_ecr_repository runner_ecr_repo {
-    count = var.ecr_image_uri == "" ? 1 : 0
-    name = local.ecr_repository_name
-    image_tag_mutability = "MUTABLE"
-    force_delete = true
+resource "aws_ecr_repository" "runner_ecr_repo" {
+  count                = var.ecr_image_uri == "" ? 1 : 0
+  name                 = local.ecr_repository_name
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
 }
 
-resource null_resource ecr_image {
-    count = var.ecr_image_uri == "" ? 1 : 0
-    triggers = {
-        docker_file = md5(file("${path.module}/docker/Dockerfile"))
-        environment_file = md5(file("${path.module}/docker/run-environment.yml"))
-        entry_file = md5(file("${path.module}/docker/python-entry.sh"))
-        handlers = sha1(join("", [for f in fileset("${path.module}/../../../src/", "**"): filesha1("${path.module}/../../../src/${f}")]))
-    }
+resource "null_resource" "ecr_image" {
+  count = var.ecr_image_uri == "" ? 1 : 0
+  triggers = {
+    docker_file      = md5(file("${path.module}/docker/Dockerfile"))
+    environment_file = md5(file("${path.module}/docker/run-environment.yml"))
+    entry_file       = md5(file("${path.module}/docker/python-entry.sh"))
+    handlers         = sha1(join("", [for f in fileset("${path.module}/../../../src/", "**") : filesha1("${path.module}/../../../src/${f}")]))
+  }
 
-    provisioner "local-exec" {
-        command = <<EOF
+  provisioner "local-exec" {
+    command = <<EOF
             echo "Creating docker container"
             set -e
             aws ecr get-login-password --region ${data.aws_region.current.name} \
@@ -61,18 +61,18 @@ resource null_resource ecr_image {
                 -f "${path.module}/docker/Dockerfile"
             docker push ${local.image_uri}
             EOF
-        }
+  }
 }
 
 
-data aws_ecr_image runner_image {
-    count = var.ecr_image_uri == "" ? 1 : 0
-    repository_name = local.ecr_repository_name
-    image_tag = local.image_tag
-    depends_on = [ null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo ]
+data "aws_ecr_image" "runner_image" {
+  count           = var.ecr_image_uri == "" ? 1 : 0
+  repository_name = local.ecr_repository_name
+  image_tag       = local.image_tag
+  depends_on      = [null_resource.ecr_image, aws_ecr_repository.runner_ecr_repo]
 }
 
-output image_uri {
-    value = (var.ecr_image_uri == "" ?
-        data.aws_ecr_image.runner_image[0].image_uri : local.image_uri)
+output "image_uri" {
+  value = (var.ecr_image_uri == "" ?
+  data.aws_ecr_image.runner_image[0].image_uri : local.image_uri)
 }

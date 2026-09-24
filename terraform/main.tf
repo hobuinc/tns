@@ -1,198 +1,197 @@
 terraform {
-    required_providers {
-        aws = {
-            source  = "hashicorp/aws"
-            version = "5.84.0"
-        }
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "5.84.0"
     }
-    backend s3 {
-        bucket = ""
-        region = ""
-        key = ""
+    archive = {
+      source = "hashicorp/archive"
     }
+    local = {
+      source = "hashicorp/local"
+    }
+  }
+  backend "s3" {
+    bucket = ""
+    region = ""
+    key    = ""
+  }
 }
 
 
 provider "aws" {
-    region = var.aws_region
+  region = var.aws_region
 }
 
-module tns_base {
-    source = "./resources/base"
-    modify_bucket = var.modify_bucket
-    s3_bucket_name = var.s3_bucket_name
-    ecr_image_uri = var.ecr_image_uri
-    env = var.env
-    prefix = var.deploy_prefix
+module "tns_base" {
+  source         = "./resources/base"
+  modify_bucket  = var.modify_bucket
+  s3_bucket_name = var.s3_bucket_name
+  ecr_image_uri  = var.ecr_image_uri
+  env            = var.env
+  prefix         = var.deploy_prefix
 }
 
-module tns_lambdas {
-    # only make this in prod env #
-    count = var.env == "prod" ? 1 : 0
+module "tns_lambdas" {
+  # only make this in prod env #
+  count = var.env == "prod" ? 1 : 0
 
-    source = "./resources/lambdas"
-    conda_env_name = var.conda_env_name
-    prefix = var.deploy_prefix
-    sts_lambda_role_name = var.sts_lambda_role_name
-    memory_size = var.lambda_memory_size
-    s3_cert_path = var.s3_cert_path
-    s3_endpoint = var.s3_endpoint
+  source               = "./resources/lambdas"
+  conda_env_name       = var.conda_env_name
+  prefix               = var.deploy_prefix
+  sts_lambda_role_name = var.sts_lambda_role_name
+  memory_size          = var.lambda_memory_size
+  s3_cert_path         = var.s3_cert_path
+  s3_endpoint          = var.s3_endpoint
 
-    image_uri = module.tns_base.image_uri
-    bucket_name = module.tns_base.s3_bucket_name
+  image_uri   = module.tns_base.image_uri
+  bucket_name = module.tns_base.s3_bucket_name
 
-    sqs_in_arn = module.tns_base.sqs_in_arn
-    sns_out_arn = module.tns_base.sns_out_arn
+  sqs_in_arn  = module.tns_base.sqs_in_arn
+  sns_out_arn = module.tns_base.sns_out_arn
 
-    # cert layer inputs
-    env_name = var.env_name
-    ca_path = var.ca_path
-    pem_path = var.pem_path
+  # cert layer inputs
+  env_name  = var.env_name
+  cert_path = var.cert_path
 }
 
 ####################################
 ##            Inputs              ##
 ####################################
 
-variable aws_region {
-    type = string
-    default = "us-west-2"
+variable "aws_region" {
+  type    = string
+  default = "us-west-2"
 }
 
-variable deploy_prefix {
-    description = "Differentiate between different deployments on the same bucket."
-    type = string
+variable "deploy_prefix" {
+  description = "Differentiate between different deployments on the same bucket."
+  type        = string
 }
 
-variable env {
-    description="Determines which set of resources are created."
-    type = string
-    default = "prod"
-    validation {
-        condition = can(regex("^(prod|test)$", var.env))
-        error_message = "prod or test are only available env types."
-    }
+variable "env" {
+  description = "Determines which set of resources are created."
+  type        = string
+  default     = "prod"
+  validation {
+    condition     = can(regex("^(prod|test)$", var.env))
+    error_message = "prod or test are only available env types."
+  }
 }
 
-variable env_name {
-    description = "Which environment TNS is being deployed to: [UC/TG/SC/TC]."
-    type = string
-    default = "UC"
-    validation {
-        condition = can(regex("^(UC|TG|SC|TC)$", var.env_name))
-        error_message = "env_name must be one of: UC, TG, SC, TC."
-    }
+variable "env_name" {
+  description = "Which environment TNS is being deployed to: [UC/TG/SC/TC]."
+  type        = string
+  default     = "UC"
+  validation {
+    condition     = can(regex("^(UC|TG|SC|TC)$", var.env_name))
+    error_message = "env_name must be one of: UC, TG, SC, TC."
+  }
 
 }
 
-variable ca_path {
-    description = "Path to cert file."
-    type = string
-    default = ""
+variable "cert_path" {
+  description = "Path to cert file."
+  type        = string
+  default     = ""
 }
 
-variable pem_path {
-    description = "Path to pem file."
-    type = string
-    default = ""
-}
-
-variable conda_env_name {
-    description="Conda environment to use."
-    type = string
-    default = "tns"
+variable "conda_env_name" {
+  description = "Conda environment to use."
+  type        = string
+  default     = "tns"
 }
 
 #defaults of "" allow easier conditionals
-variable sts_lambda_role_name {
-    description="Name of previously created IAM role for Compare lambda function."
-    type = string
-    default = ""
+variable "sts_lambda_role_name" {
+  description = "Name of previously created IAM role for Compare lambda function."
+  type        = string
+  default     = ""
 }
-variable lambda_memory_size {
-    description="Set the memory size of the lambda function."
-    type = number
-    default = 10240
-}
-
-variable s3_bucket_name {
-    description="Name of previously created S3 bucket."
-    type = string
-    default = ""
+variable "lambda_memory_size" {
+  description = "Set the memory size of the lambda function."
+  type        = number
+  default     = 10240
 }
 
-variable modify_bucket {
-    description="If the S3 bucket should be modified with lifecycle events."
-    type = bool
-    default = "false"
+variable "s3_bucket_name" {
+  description = "Name of previously created S3 bucket."
+  type        = string
+  default     = ""
 }
 
-variable ecr_image_uri {
-    description="ECR Image URI, can be obtained from docker_init script."
-    type = string
-    default = ""
+variable "modify_bucket" {
+  description = "If the S3 bucket should be modified with lifecycle events."
+  type        = bool
+  default     = "false"
 }
 
-variable s3_cert_path {
-    description="SSL S3 Cert path for higher network security."
-    type = string
-    default = ""
+variable "ecr_image_uri" {
+  description = "ECR Image URI, can be obtained from docker_init script."
+  type        = string
+  default     = ""
 }
 
-variable s3_endpoint {
-    description = "Maps to AWS_S3_ENDPOINT in the lambda for duckdb usage."
-    type = string
-    default = ""
+variable "s3_cert_path" {
+  description = "SSL S3 Cert path for higher network security."
+  type        = string
+  default     = ""
+}
+
+variable "s3_endpoint" {
+  description = "Maps to AWS_S3_ENDPOINT in the lambda for duckdb usage."
+  type        = string
+  default     = ""
 }
 
 #####################################
 ##            Outputs              ##
 #####################################
 
-output env {
-    value = var.env
+output "env" {
+  value = var.env
 }
-output prefix {
-    value = var.deploy_prefix
+output "prefix" {
+  value = var.deploy_prefix
 }
-output aws_region {
-    value = var.aws_region
+output "aws_region" {
+  value = var.aws_region
 }
-output s3_bucket_name {
-    value = module.tns_base.s3_bucket_name
+output "s3_bucket_name" {
+  value = module.tns_base.s3_bucket_name
 }
-output lambda_memory_size {
-    value = var.lambda_memory_size
+output "lambda_memory_size" {
+  value = var.lambda_memory_size
 }
-output s3_cert_path {
-    value = var.s3_cert_path
+output "s3_cert_path" {
+  value = var.s3_cert_path
 }
-output s3_endpoint {
-    value = var.s3_endpoint
+output "s3_endpoint" {
+  value = var.s3_endpoint
 }
 
 
 #comp
-output sqs_out {
-    value = module.tns_base.sqs_out_arn
+output "sqs_out" {
+  value = module.tns_base.sqs_out_arn
 }
-output sns_out {
-    value = module.tns_base.sns_out_arn
+output "sns_out" {
+  value = module.tns_base.sns_out_arn
 }
-output dlq_out {
-    value = module.tns_base.dlq_out_arn
+output "dlq_out" {
+  value = module.tns_base.dlq_out_arn
 }
-output sqs_in {
-    value = module.tns_base.sqs_in_arn
+output "sqs_in" {
+  value = module.tns_base.sqs_in_arn
 }
-output sns_in {
-    value = module.tns_base.sns_in_arn
+output "sns_in" {
+  value = module.tns_base.sns_in_arn
 }
-output dlq_in {
-    value = module.tns_base.dlq_in_arn
+output "dlq_in" {
+  value = module.tns_base.dlq_in_arn
 }
-output container {
-    value = module.tns_base.image_uri
+output "container" {
+  value = module.tns_base.image_uri
 }
 
 ######################################
